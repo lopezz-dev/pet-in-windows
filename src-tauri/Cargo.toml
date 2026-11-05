@@ -1,0 +1,19 @@
+[package]
+name = "pet-in-windows"
+version = "0.1.0"
+description = "Pixel-art pets on your taskbar that show what your Claude Code agents are doing"
+edition = "2021"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
