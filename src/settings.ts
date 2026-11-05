@@ -8,6 +8,7 @@ export type Zone = "all" | "left" | "center" | "right";
 
 export interface Settings {
   // Pet
+  theme: string; // a ThemeId from art.ts, or "mix" (one per session)
   colorMode: "auto" | "fixed";
   color: string; // used when colorMode = fixed
   autoColors: string[]; // rotation when colorMode = auto
@@ -40,6 +41,7 @@ export const PRESET_COLORS = [
 ];
 
 export const DEFAULTS: Settings = {
+  theme: "classic",
   colorMode: "auto",
   color: "#d97757",
   autoColors: [...PRESET_COLORS],

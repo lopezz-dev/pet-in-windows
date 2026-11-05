@@ -58,12 +58,15 @@ export function makePalette(hex: string): Palette {
 // --- generic blob rasterizer --------------------------------------------------
 type Shade = (nx: number, ny: number, edge: boolean) => string | null;
 
-function rasterBlob(w: number, h: number, power: number, shade: Shade) {
+type InsideFn = (x: number, y: number, nx: number, ny: number) => boolean;
+
+function rasterBlob(w: number, h: number, shape: number | InsideFn, shade: Shade) {
   const inside = (x: number, y: number) => {
     if (x < 0 || y < 0 || x >= w || y >= h) return false;
     const nx = (x + 0.5 - w / 2) / (w / 2);
     const ny = (y + 0.5 - h / 2) / (h / 2);
-    return Math.abs(nx) ** power + Math.abs(ny) ** power <= 1;
+    if (typeof shape === "function") return shape(x, y, nx, ny);
+    return Math.abs(nx) ** shape + Math.abs(ny) ** shape <= 1;
   };
   const px: { x: number; y: number; c: string }[] = [];
   for (let y = 0; y < h; y++) {
@@ -91,10 +94,28 @@ function cached(key: string, w: number, h: number, paint: (c: CanvasRenderingCon
   return cv;
 }
 
-/** The body: rounded "squircle" with outline, light ramp, belly and shine. */
-function bodySprite(p: Palette, w: number, h: number) {
-  return cached(`body|${p.base}|${w}|${h}`, w, h, (c) => {
-    const { px, inside } = rasterBlob(w, h, 2.6, (nx, ny, edge) => {
+export type BodyShape = "squircle" | "dome" | "ghost";
+
+/** Body silhouettes. `wave` animates the ghost's hem. */
+function shapeFn(shape: BodyShape, w: number, h: number, wave: number): number | InsideFn {
+  switch (shape) {
+    case "squircle":
+      return 2.6;
+    case "dome": // slime: round top, wide flat bottom
+      return (_x, _y, nx, ny) => (ny < 0 ? nx * nx + ny * ny <= 1 : Math.abs(nx) ** 5 + Math.abs(ny) ** 6 <= 1);
+    case "ghost": // round head, straight sides, wavy hem
+      return (x, y, nx, ny) => {
+        if (ny < -0.1) return nx * nx + ((ny + 0.1) / 0.9) ** 2 <= 1;
+        if (Math.abs(nx) > 0.97) return false;
+        return !(y >= h - 2 && (x + wave) % 4 >= (y === h - 1 ? 2 : 3));
+      };
+  }
+}
+
+/** The body: outline, light ramp, belly and shine on top of a silhouette. */
+function bodySprite(p: Palette, w: number, h: number, shape: BodyShape = "squircle", wave = 0) {
+  return cached(`body|${p.base}|${w}|${h}|${shape}|${wave}`, w, h, (c) => {
+    const { px, inside } = rasterBlob(w, h, shapeFn(shape, w, h, wave), (nx, ny, edge) => {
       if (edge) return p.outline;
       if (nx * 0.45 + ny * 0.9 > 0.6) return p.shadow;
       const belly = ny > 0.15 && ny < 0.72 && Math.abs(nx) < 0.5 - (ny - 0.15) * 0.35;
@@ -161,12 +182,55 @@ export function drawGlyph(ctx: CanvasRenderingContext2D, g: string[], x: number,
     }
 }
 
+// --- themes -------------------------------------------------------------------
+// Every theme is original art built from the same rules. To add one: append a
+// ThemeDef here and handle its `head` (and optionally tool/target) below.
+
+export type ThemeId = "classic" | "cat" | "slime" | "ghost" | "knight" | "wizard";
+export type Tool = "pickaxe" | "sword" | "wand";
+
+export interface ThemeDef {
+  id: ThemeId;
+  name: string;
+  desc: string;
+  shape: BodyShape;
+  legs: boolean;
+  /** Wears the miner helmet while working (if enabled in settings). */
+  minerHat: boolean;
+  tool: Tool;
+  /** Body colour is washed towards white (ghosts). */
+  pale?: boolean;
+}
+
+export const THEMES: ThemeDef[] = [
+  { id: "classic", name: "Bichito", desc: "El original: antenas con bombilla", shape: "squircle", legs: true, minerHat: true, tool: "pickaxe" },
+  { id: "cat", name: "Gatete", desc: "Orejas, bigotes, cola y cascabel", shape: "squircle", legs: true, minerHat: true, tool: "pickaxe" },
+  { id: "slime", name: "Slime", desc: "Gelatina que rebota, con núcleo brillante", shape: "dome", legs: false, minerHat: true, tool: "pickaxe" },
+  { id: "ghost", name: "Fantasmita", desc: "Flota y lleva un fuego fatuo", shape: "ghost", legs: false, minerHat: false, tool: "wand", pale: true },
+  { id: "knight", name: "Caballero", desc: "Yelmo con penacho y espada de entrenamiento", shape: "squircle", legs: true, minerHat: false, tool: "sword" },
+  { id: "wizard", name: "Mago", desc: "Sombrero puntiagudo y varita", shape: "squircle", legs: true, minerHat: false, tool: "wand" },
+];
+export const themeOf = (id: string) => THEMES.find((t) => t.id === id) ?? THEMES[0];
+
+function mixHex(a: string, b: string, k: number) {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ch = (s: number) => Math.round(((pa >> s) & 255) * (1 - k) + ((pb >> s) & 255) * k);
+  return "#" + ((ch(16) << 16) | (ch(8) << 8) | ch(0)).toString(16).padStart(6, "0");
+}
+
+/** Palette for a theme (ghosts are paler). */
+export function themePalette(theme: ThemeDef, hex: string) {
+  return makePalette(theme.pale ? mixHex(hex, "#ffffff", 0.55) : hex);
+}
+
 // --- the pet ------------------------------------------------------------------
 export type Pose = "stand" | "walk" | "sleep" | "jump" | "land" | "mine";
 export type Eyes = "open" | "blink" | "closed" | "happy" | "wide";
 export type Mouth = "smile" | "open" | "o" | "flat";
 
 export interface Look {
+  theme: ThemeDef;
   palette: Palette;
   scale: number;
   dir: 1 | -1;
@@ -175,18 +239,34 @@ export interface Look {
   mouth: Mouth;
   walkPhase: number; // 0..3
   breathe: boolean; // 1px "inhale"
-  bulb: string; // antenna / helmet lamp colour
+  bulb: string; // status colour (bulbs, plume, lamp, bell, core…)
   bulbOn: boolean;
-  hat: boolean;
-  swing: number; // pickaxe phase 0..3 (3 = strike)
+  hat: boolean; // miner helmet
+  swing: number; // tool phase 0..3 (3 = strike)
   lift: number; // px above the ground (hops), in screen px
+  frame: number; // free-running counter for idle animation (tails, hems…)
 }
 
 const HAT = { base: "#f2c230", dark: "#c98f17", light: "#fff3b0", outline: "#4a3208" };
-const TOOL = { wood: "#9b6532", woodDark: "#6b4220", steel: "#cfd6df", steelDark: "#6e7785", steelLight: "#f4f8fc" };
+const TOOL = { wood: "#9b6532", woodDark: "#6b4220", steel: "#cfd6df", steelDark: "#6e7785", steelLight: "#f4f8fc", gold: "#f2c230" };
+const STEEL = { base: "#c3cad4", light: "#eef2f6", dark: "#7d8794", outline: "#2b2f38" };
+const ROBE = { base: "#4b3a8c", light: "#6a58b8", outline: "#1b1238", band: "#f2c230" };
 
-/** Body size for each pose (sprite pixels). */
+/** Body size for each pose and theme (sprite pixels). */
 function bodySize(L: Look): [number, number] {
+  const shape = L.theme.shape;
+  if (shape === "dome") {
+    // Slimes squish instead of walking.
+    if (L.pose === "sleep") return [25, 9];
+    if (L.pose === "jump") return [19, 14];
+    if (L.pose === "land") return [26, 9];
+    if (L.pose === "walk") return L.walkPhase % 2 ? [24, 10] : [21, 13];
+    return [22, L.breathe ? 11 : 12];
+  }
+  if (shape === "ghost") {
+    if (L.pose === "sleep") return [20, 13];
+    return [18, L.breathe ? 15 : 16];
+  }
   switch (L.pose) {
     case "sleep":
       return [23, L.breathe ? 11 : 10];
@@ -203,10 +283,12 @@ function bodySize(L: Look): [number, number] {
 export function drawPet(ctx: CanvasRenderingContext2D, cx: number, groundY: number, L: Look) {
   const sc = L.scale;
   const p = L.palette;
+  const th = L.theme;
   const [W, H] = bodySize(L);
-  const legsH = L.pose === "sleep" ? 0 : 2;
+  const legsH = th.legs && L.pose !== "sleep" ? 2 : 0;
+  const float = th.shape === "ghost" ? (Math.floor(L.frame / 12) % 2 ? 3 : 2) : 0;
   const left = Math.round(cx - (W * sc) / 2);
-  const top = Math.round(groundY - (H + legsH) * sc - L.lift);
+  const top = Math.round(groundY - (H + legsH + float) * sc - L.lift);
 
   ctx.save();
   if (L.dir < 0) {
@@ -218,9 +300,23 @@ export function drawPet(ctx: CanvasRenderingContext2D, cx: number, groundY: numb
     ctx.fillStyle = c;
     ctx.fillRect(left + x * sc, top + y * sc, w * sc, h * sc);
   };
+  const glow = L.bulbOn ? L.bulb : p.shadow;
+
+  // Cat tail (behind the body, on the back side).
+  if (th.id === "cat") {
+    const sway = Math.floor(L.frame / 10) % 4;
+    for (let i = 0; i < 6; i++) {
+      const tx = -1 - Math.floor(i / 2) + (i > 3 && sway < 2 ? 1 : 0);
+      const ty = H - 4 - i;
+      P(tx - 1, ty, p.outline);
+      P(tx, ty, i > 4 ? p.light : p.base);
+    }
+    P(-3 + (sway < 2 ? 1 : 0), H - 11, p.outline, 2, 1);
+  }
 
   // Legs (behind the body's bottom outline).
   if (legsH) {
+    const boot = th.id === "knight" ? STEEL.dark : th.id === "wizard" ? ROBE.outline : p.outline;
     const xs = [0.15, 0.34, 0.56, 0.75].map((f) => Math.round(W * f));
     xs.forEach((lx, i) => {
       const lifted = L.pose === "walk" && ((L.walkPhase === 1 && i % 2 === 0) || (L.walkPhase === 3 && i % 2 === 1));
@@ -228,21 +324,24 @@ export function drawPet(ctx: CanvasRenderingContext2D, cx: number, groundY: numb
       const x = lx + splay + (lifted ? 1 : 0);
       if (lifted) {
         P(x, H - 1, p.shadow, 2, 1);
-        P(x, H, p.outline, 2, 1);
+        P(x, H, boot, 2, 1);
       } else {
         P(x, H - 1, p.shadow, 2, 1);
         P(x, H, p.shadow, 2, 1);
-        P(x, H + 1, p.outline, 2, 1);
-        P(x + 1, H + 1, p.outline, 1, 1);
+        P(x, H + 1, boot, 2, 1);
+        P(x + 1, H + 1, boot, 1, 1);
       }
     });
   }
 
   // Body
-  ctx.drawImage(bodySprite(p, W, H), left, top, W * sc, H * sc);
+  const wave = th.shape === "ghost" ? Math.floor(L.frame / 8) % 4 : 0;
+  if (th.shape === "ghost") ctx.globalAlpha *= 0.94;
+  ctx.drawImage(bodySprite(p, W, H, th.shape, wave), left, top, W * sc, H * sc);
+  if (th.shape === "ghost") ctx.globalAlpha /= 0.94;
 
   // Face (always drawn "facing right"; the mirror handles left).
-  const ey = Math.round(H * 0.3);
+  const ey = th.shape === "ghost" ? Math.round(H * 0.32) : th.shape === "dome" ? Math.round(H * 0.38) : Math.round(H * 0.3);
   const ex = [Math.round(W * 0.33) + 1, Math.round(W * 0.62) + 1];
   for (const x of ex) {
     switch (L.eyes) {
@@ -276,9 +375,18 @@ export function drawPet(ctx: CanvasRenderingContext2D, cx: number, groundY: numb
   const my = ey + 3;
   switch (L.mouth) {
     case "smile":
-      P(mx - 1, my, INK);
-      P(mx, my + 1, INK);
-      P(mx + 1, my, INK);
+      if (th.id === "cat") {
+        // ":3"
+        P(mx - 1, my, INK);
+        P(mx, my + 1, INK);
+        P(mx + 1, my, INK);
+        P(mx + 2, my + 1, INK);
+        P(mx + 3, my, INK);
+      } else {
+        P(mx - 1, my, INK);
+        P(mx, my + 1, INK);
+        P(mx + 1, my, INK);
+      }
       break;
     case "open":
       P(mx - 1, my, INK, 3, 1);
@@ -295,80 +403,237 @@ export function drawPet(ctx: CanvasRenderingContext2D, cx: number, groundY: numb
       break;
   }
 
-  // Head gear: miner helmet (with lamp) or antennae (with bulbs).
-  const glow = L.bulbOn ? L.bulb : p.shadow;
-  if (L.hat) {
-    const x0 = Math.round(W * 0.18);
-    const n = W - 2 * x0;
-    P(x0 + 2, -3, HAT.outline, n - 4, 1);
-    P(x0 + 1, -2, HAT.outline);
-    P(x0 + 2, -2, HAT.base, n - 4, 1);
-    P(x0 + n - 2, -2, HAT.outline);
-    P(x0, -1, HAT.outline);
-    P(x0 + 1, -1, HAT.base, n - 2, 1);
-    P(x0 + n - 1, -1, HAT.outline);
-    P(x0 + 3, -2, HAT.light, 2, 1);
-    P(x0 + 2, -1, HAT.light);
-    // brim
-    P(x0 - 2, 0, HAT.outline);
-    P(x0 - 1, 0, HAT.dark, n + 2, 1);
-    P(x0 + n + 1, 0, HAT.outline);
-    P(x0 - 2, 1, HAT.outline, n + 4, 1);
-    // lamp
-    const lx = x0 + n - 5;
-    P(lx - 1, -2, HAT.outline, 4, 1);
-    P(lx - 1, -1, HAT.outline);
-    P(lx, -1, glow, 2, 1);
-    P(lx + 2, -1, HAT.outline);
-    if (L.bulbOn) P(lx, -1, WHITE);
-  } else {
-    const ax = [Math.round(W * 0.3), Math.round(W * 0.64)];
-    for (const [i, a] of ax.entries()) {
-      if (L.pose === "sleep") {
-        // Drooping antennae.
-        P(a, -1, p.outline, 2, 1);
-        P(a + 2, -2, p.outline, 1, 1);
-        P(a + 2, -1, glow);
-        continue;
+  // --- Head gear: miner helmet replaces it while working, if the theme allows.
+  if (L.hat && th.minerHat) drawMinerHat(P, W, glow, L.bulbOn);
+  else {
+    switch (th.id) {
+      case "classic":
+        drawAntennae(P, L, W, p, glow);
+        break;
+      case "cat":
+        drawCat(P, L, W, H, p, my, glow);
+        break;
+      case "slime": {
+        // Glowing core + extra shine.
+        const cxp = Math.round(W * 0.5) - 1;
+        const cyp = Math.round(H * 0.72);
+        P(cxp, cyp, glow, 2, 2);
+        if (L.bulbOn) P(cxp, cyp, WHITE);
+        P(Math.round(W * 0.7), Math.round(H * 0.18), p.shine, 2, 1);
+        break;
       }
-      const sway = L.pose === "walk" ? ((L.walkPhase + i) % 4 < 2 ? 0 : 1) : 0;
-      P(a, -1, p.outline);
-      P(a + sway, -2, p.outline);
-      // bulb: 2x2 with a 1px ring
-      const bx = a + sway;
-      P(bx, -5, p.outline, 2, 1);
-      P(bx - 1, -4, p.outline, 1, 2);
-      P(bx + 2, -4, p.outline, 1, 2);
-      P(bx, -4, glow, 2, 2);
-      if (L.bulbOn) P(bx, -4, WHITE);
+      case "ghost": {
+        // Will-o'-wisp floating above the head.
+        const fx = Math.round(W / 2) - 1;
+        const flick = Math.floor(L.frame / 6) % 2;
+        P(fx, -2, glow, 2, 1);
+        P(fx + flick, -3, glow, 1, 1);
+        P(fx, -3, L.bulbOn ? WHITE : glow, 1, 1);
+        P(fx + 1 - flick, -4, glow, 1, 1);
+        break;
+      }
+      case "knight":
+        drawKnightHelm(P, W, ey, mx, L.bulb, L.bulbOn);
+        break;
+      case "wizard":
+        drawWizardHat(P, W, glow, L.bulbOn);
+        break;
     }
   }
 
-  // Pickaxe while mining: a short arm and a tool that rotates around the grip.
-  if (L.pose === "mine") {
-    const ay = Math.round(H * 0.55);
-    P(W - 1, ay, p.base, 1, 2);
-    P(W, ay, p.outline, 1, 2);
-    const angle = [2.2, 1.5, 0.6, -0.55][L.swing % 4];
-    const dx = Math.cos(angle);
-    const dy = -Math.sin(angle);
-    const gx = W + 0.5;
-    const gy = ay + 0.5;
-    for (let i = 0; i <= 7; i++) {
-      P(Math.floor(gx + dx * i), Math.floor(gy + dy * i), i % 3 === 0 ? TOOL.woodDark : TOOL.wood);
-    }
-    const hx = gx + dx * 8;
-    const hy = gy + dy * 8;
-    for (let j = -3; j <= 3; j++) {
-      const back = Math.abs(j) === 3 ? -1 : 0; // curved head
-      const c = Math.abs(j) === 3 ? TOOL.steelDark : j === -1 ? TOOL.steelLight : TOOL.steel;
-      P(Math.floor(hx - dy * j + dx * back), Math.floor(hy + dx * j + dy * back), c);
-    }
-  }
+  // Tool while working: a short arm and a tool that rotates around the grip.
+  if (L.pose === "mine") drawTool(P, th.tool, W, H, p, L.swing);
 
   ctx.restore();
-  return { x: left, y: top - 5 * sc, w: W * sc, h: (H + legsH + 5) * sc, headY: top };
+  const extra = th.id === "wizard" ? 11 : 5;
+  return { x: left, y: top - extra * sc, w: W * sc, h: (H + legsH + float + extra) * sc, headY: top };
 }
+
+type Px = (x: number, y: number, c: string, w?: number, h?: number) => void;
+
+function drawMinerHat(P: Px, W: number, glow: string, on: boolean) {
+  const x0 = Math.round(W * 0.18);
+  const n = W - 2 * x0;
+  P(x0 + 2, -3, HAT.outline, n - 4, 1);
+  P(x0 + 1, -2, HAT.outline);
+  P(x0 + 2, -2, HAT.base, n - 4, 1);
+  P(x0 + n - 2, -2, HAT.outline);
+  P(x0, -1, HAT.outline);
+  P(x0 + 1, -1, HAT.base, n - 2, 1);
+  P(x0 + n - 1, -1, HAT.outline);
+  P(x0 + 3, -2, HAT.light, 2, 1);
+  P(x0 + 2, -1, HAT.light);
+  P(x0 - 2, 0, HAT.outline);
+  P(x0 - 1, 0, HAT.dark, n + 2, 1);
+  P(x0 + n + 1, 0, HAT.outline);
+  P(x0 - 2, 1, HAT.outline, n + 4, 1);
+  const lx = x0 + n - 5;
+  P(lx - 1, -2, HAT.outline, 4, 1);
+  P(lx - 1, -1, HAT.outline);
+  P(lx, -1, glow, 2, 1);
+  P(lx + 2, -1, HAT.outline);
+  if (on) P(lx, -1, WHITE);
+}
+
+function drawAntennae(P: Px, L: Look, W: number, p: Palette, glow: string) {
+  const ax = [Math.round(W * 0.3), Math.round(W * 0.64)];
+  for (const [i, a] of ax.entries()) {
+    if (L.pose === "sleep") {
+      P(a, -1, p.outline, 2, 1);
+      P(a + 2, -2, p.outline, 1, 1);
+      P(a + 2, -1, glow);
+      continue;
+    }
+    const sway = L.pose === "walk" ? ((L.walkPhase + i) % 4 < 2 ? 0 : 1) : 0;
+    P(a, -1, p.outline);
+    P(a + sway, -2, p.outline);
+    const bx = a + sway;
+    P(bx, -5, p.outline, 2, 1);
+    P(bx - 1, -4, p.outline, 1, 2);
+    P(bx + 2, -4, p.outline, 1, 2);
+    P(bx, -4, glow, 2, 2);
+    if (L.bulbOn) P(bx, -4, WHITE);
+  }
+}
+
+function drawCat(P: Px, L: Look, W: number, H: number, p: Palette, my: number, glow: string) {
+  // Ears (twitch now and then).
+  const twitch = L.frame % 90 < 6 ? 1 : 0;
+  for (const e of [Math.round(W * 0.14), W - Math.round(W * 0.14) - 5]) {
+    const back = e < W / 2;
+    const tip = back ? 0 : twitch;
+    P(e, 0, p.outline);
+    P(e + 1, 0, p.base);
+    P(e + 2, 0, p.cheek);
+    P(e + 3, 0, p.base);
+    P(e + 4, 0, p.outline);
+    P(e, -1, p.outline);
+    P(e + 1, -1, p.base);
+    P(e + 2, -1, p.cheek);
+    P(e + 3, -1, p.outline);
+    P(e + 1 + tip, -2, p.outline, 2, 1);
+    P(e + 1 + tip, -3, p.outline);
+  }
+  // Whiskers on the face side.
+  P(W - 1, my - 1, p.outline, 2, 1);
+  P(W - 1, my + 1, p.outline, 2, 1);
+  // Collar + bell (status colour).
+  P(Math.round(W * 0.3), H - 4, "#c0303c", Math.round(W * 0.42), 1);
+  const bx = Math.round(W * 0.5) - 1;
+  P(bx - 1, H - 3, p.outline, 4, 1);
+  P(bx, H - 3, glow, 2, 1);
+  if (L.bulbOn) P(bx, H - 3, WHITE);
+}
+
+function drawKnightHelm(P: Px, W: number, ey: number, mx: number, plume: string, on: boolean) {
+  // Steel cap down to just above the eyes, with a rim and a nasal guard.
+  P(5, -2, STEEL.outline, W - 10, 1);
+  P(3, -1, STEEL.outline, 2, 1);
+  P(5, -1, STEEL.base, W - 10, 1);
+  P(W - 5, -1, STEEL.outline, 2, 1);
+  for (let y = 0; y < ey - 1; y++) {
+    P(1, y, STEEL.outline);
+    P(2, y, STEEL.light, 2, 1);
+    P(4, y, STEEL.base, W - 8, 1);
+    P(W - 4, y, STEEL.dark, 2, 1);
+    P(W - 2, y, STEEL.outline);
+  }
+  P(1, ey - 1, STEEL.outline, W - 2, 1);
+  P(mx - 1, ey - 1, STEEL.dark, 1, 3);
+  P(6, 0, STEEL.light, 3, 1); // glint
+  // Rivets
+  P(4, ey - 2, STEEL.dark);
+  P(W - 6, ey - 2, STEEL.dark);
+  // Plume (status colour), sweeping back.
+  const c = plume;
+  P(Math.round(W / 2) - 1, -3, c, 3, 1);
+  P(Math.round(W / 2) - 3, -4, c, 4, 1);
+  P(Math.round(W / 2) - 5, -5, c, 4, 1);
+  P(Math.round(W / 2) - 6, -6, c, 3, 1);
+  P(Math.round(W / 2) - 6, -4, STEEL.outline);
+  if (on) P(Math.round(W / 2) - 2, -4, WHITE, 2, 1);
+}
+
+function drawWizardHat(P: Px, W: number, glow: string, on: boolean) {
+  // Brim
+  P(-1, 0, ROBE.outline, W + 2, 1);
+  P(0, -1, ROBE.outline);
+  P(1, -1, ROBE.base, W - 2, 1);
+  P(W - 1, -1, ROBE.outline);
+  // Cone, bending backwards at the tip.
+  for (let k = 0; k < 9; k++) {
+    const y = -2 - k;
+    const width = Math.max(1, Math.round((W - 8) * (1 - k / 9)));
+    const bend = k > 5 ? -(k - 5) : 0;
+    const x0 = Math.round(W / 2 - width / 2) + bend;
+    P(x0 - 1, y, ROBE.outline);
+    P(x0, y, ROBE.light);
+    if (width > 1) P(x0 + 1, y, ROBE.base, width - 1, 1);
+    P(x0 + width, y, ROBE.outline);
+    if (k === 0) P(x0, y, ROBE.band, width, 1);
+  }
+  P(Math.round(W / 2), -5, "#ffd84a"); // star
+  P(Math.round(W / 2) - 1, -6, "#fff3b0");
+  // Pompom (status colour) at the tip.
+  const tx = Math.round(W / 2) - 4;
+  P(tx - 1, -12, ROBE.outline, 2, 1);
+  P(tx - 2, -11, glow, 2, 1);
+  if (on) P(tx - 2, -11, WHITE);
+}
+
+function drawTool(P: Px, tool: Tool, W: number, H: number, p: Palette, swing: number) {
+  const ay = Math.round(H * 0.55);
+  P(W - 1, ay, p.base, 1, 2);
+  P(W, ay, p.outline, 1, 2);
+  const angle = [2.2, 1.5, 0.6, -0.55][swing % 4];
+  const dx = Math.cos(angle);
+  const dy = -Math.sin(angle);
+  const gx = W + 0.5;
+  const gy = ay + 0.5;
+  const at = (i: number, j = 0) => [Math.floor(gx + dx * i - dy * j), Math.floor(gy + dy * i + dx * j)] as const;
+
+  if (tool === "pickaxe") {
+    for (let i = 0; i <= 7; i++) P(...at(i), i % 3 === 0 ? TOOL.woodDark : TOOL.wood);
+    for (let j = -3; j <= 3; j++) {
+      const back = Math.abs(j) === 3 ? -1 : 0;
+      const c = Math.abs(j) === 3 ? TOOL.steelDark : j === -1 ? TOOL.steelLight : TOOL.steel;
+      P(...at(8 + back, j), c);
+    }
+  } else if (tool === "sword") {
+    P(...at(0), TOOL.woodDark);
+    P(...at(1), TOOL.wood);
+    for (let j = -2; j <= 2; j++) P(...at(2, j), TOOL.gold);
+    for (let i = 3; i <= 10; i++) {
+      P(...at(i), i === 10 ? TOOL.steelDark : TOOL.steelLight);
+      P(...at(i, 1), TOOL.steel);
+    }
+  } else {
+    for (let i = 0; i <= 5; i++) P(...at(i), i < 2 ? TOOL.woodDark : TOOL.wood);
+    const [sx, sy] = at(7);
+    P(sx, sy, "#ffd84a");
+    P(sx - 1, sy, "#ffd84a");
+    P(sx + 1, sy, "#ffd84a");
+    P(sx, sy - 1, "#ffd84a");
+    P(sx, sy + 1, "#ffd84a");
+    P(sx, sy, WHITE);
+  }
+}
+
+/** What the pet works on: rock (pickaxe), training dummy (sword), nothing (wand). */
+export function drawTarget(ctx: CanvasRenderingContext2D, tool: Tool, cx: number, groundY: number, sc: number, hits: number) {
+  if (tool === "pickaxe") return drawRock(ctx, cx, groundY, sc, hits);
+  if (tool === "sword") {
+    const wob = hits % 2 ? sc : 0;
+    ctx.fillStyle = "#6b4220";
+    ctx.fillRect(Math.round(cx - sc / 2), groundY - 12 * sc, sc, 12 * sc);
+    ctx.fillRect(Math.round(cx - 3 * sc + wob), groundY - 9 * sc, 6 * sc, sc);
+    drawBlob(ctx, cx - 3 * sc + wob, groundY - 16 * sc, 6, 7, sc, "#d8b878", "#4a3315", "#b8955a");
+    ctx.fillStyle = "#4a3315";
+    ctx.fillRect(Math.round(cx - sc + wob), groundY - 14 * sc, sc, sc);
+    ctx.fillRect(Math.round(cx + sc + wob), groundY - 13 * sc, sc, sc);
+  }
+}
+
 
 /** Thought cloud with "..." that fills up, trailing bubbles from the head. */
 export function drawThought(ctx: CanvasRenderingContext2D, x: number, headY: number, dir: 1 | -1, sc: number, t: number) {

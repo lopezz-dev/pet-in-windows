@@ -17,6 +17,29 @@ Pasa el ratón por encima de una mascota para ver el proyecto, la rama, qué est
 La bombilla de las antenas (o la linterna del casco) también indica el estado por color. Fuera de las mascotas la ventana
 deja pasar los clics, así que no estorba.
 
+## Temáticas
+
+| Tema | Detalle | Trabajando | Indicador de estado |
+| --- | --- | --- | --- |
+| Bichito | El original, con antenas | Casco de minero + pico y roca | Bombillas de las antenas |
+| Gatete | Orejas, bigotes, cola y `:3` | Casco de minero + pico y roca | Cascabel del collar |
+| Slime | Gelatina que rebota en vez de andar | Casco de minero + pico y roca | Núcleo brillante |
+| Fantasmita | Flota con el borde ondulado | Varita mágica con chispas | Fuego fatuo |
+| Caballero | Yelmo con nasal | Espada contra un muñeco de entrenamiento | Penacho |
+| Mago | Sombrero puntiagudo con estrella | Varita mágica con chispas | Pompón del sombrero |
+
+También hay **Mezcla**: un tema distinto por conversación.
+
+### Añadir una temática
+
+Las temáticas son código, no imágenes: `src/art.ts` → `THEMES` más su adorno de cabeza en `drawPet`
+(y, si quieres, una herramienta en `drawTool` y un objetivo en `drawTarget`). Con `npm run dev` y
+`/settings.html` las ves al momento en la vista previa. Los PR con temas nuevos son bienvenidos.
+
+> **Solo arte original.** No se aceptan personajes, logos ni diseños reconocibles de juegos, series
+> o marcas (aunque estén «pixelados» o renombrados). Los temas inspirados en géneros (fantasía,
+> ciencia ficción, terror cuqui…) son perfectos.
+
 ## Cómo funciona
 
 - **Sin configuración.** Las conversaciones abiertas salen del registro de procesos de Claude Code,
@@ -28,6 +51,8 @@ deja pasar los clics, así que no estorba.
   mientras la app las vigila (durante 15 min, configurable). La app de escritorio mantiene vivos procesos
   `idle` de muchas conversaciones antiguas, y esas no aparecen salvo que actives «Mostrar todas las
   conversaciones abiertas».
+- Abrir una conversación en la app de escritorio levanta un proceso que sale `busy` un momento. Solo cuenta
+  como actividad si la transcripción se escribe después de que arranque ese proceso.
 - **«Necesita tu permiso»** = el proceso está `idle` pero la última llamada a una herramienta no tiene
   resultado.
 - Con versiones antiguas de Claude Code sin registro, se usan los transcripts modificados recientemente.
@@ -37,7 +62,7 @@ deja pasar los clics, así que no estorba.
 Desde la bandeja (**Ajustes…**) o con clic derecho sobre una mascota. Hay vista previa en vivo y se
 guarda solo, en `%APPDATA%/dev.petinwindows.app/settings.json`:
 
-- **Mascota:** color único por sesión (eliges qué colores entran en la rotación) o un color fijo con
+- **Mascota:** temática (o mezcla), color único por sesión (eliges qué colores entran en la rotación) o un color fijo con
   selector libre, tamaño, velocidad y casco de minero.
 - **Bocadillo:** estilos Pixel, Cómic, Terminal y Cristal, tamaño de texto, color de acento y si se
   muestra la tarea o la última respuesta.

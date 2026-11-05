@@ -1,5 +1,5 @@
 import "./bubbles.css";
-import { GLYPH_HEART, GLYPH_STAR, GLYPH_Z, drawAlert, drawGlyph, drawPet, drawRock, drawThought, makePalette, type Eyes, type Mouth, type Pose } from "./art";
+import { GLYPH_HEART, GLYPH_STAR, GLYPH_Z, THEMES, drawAlert, drawGlyph, drawPet, drawTarget, drawThought, themeOf, themePalette, type Eyes, type Mouth, type Pose } from "./art";
 import { DEFAULTS, isTauri, loadSettings, onSettings, type Settings } from "./settings";
 
 // ---------------------------------------------------------------------------
@@ -144,6 +144,10 @@ class Pet {
   get scale() {
     return this.agent.kind === "sub" ? Math.max(1, S.scale - 1) : S.scale;
   }
+  get theme() {
+    const key = this.agent.kind === "sub" ? (this.agent.parentId ?? this.agent.id) : this.agent.id;
+    return S.theme === "mix" ? THEMES[(hash(key) >>> 3) % THEMES.length] : themeOf(S.theme);
+  }
   get color() {
     if (S.colorMode === "fixed") return S.color;
     const key = this.agent.kind === "sub" ? (this.agent.parentId ?? this.agent.id) : this.agent.id;
@@ -287,6 +291,22 @@ class Pet {
       const sc = this.scale;
       const rx = this.x + this.dir * 18 * sc;
       this.crack = (this.crack + 1) % 4;
+      const tool = this.theme.tool;
+      if (tool === "wand") {
+        // Magic burst at the wand tip.
+        const colors = ["#ffd84a", "#b892ff", "#7be0ff", "#ffffff"];
+        const wx = this.x + this.dir * 16 * sc;
+        const wy = GROUND() - 8 * sc;
+        for (let i = 0; i < 7; i++) emit({ x: wx, y: wy, vx: rand(-70, 70), vy: rand(-90, 20), life: rand(0.5, 0.9), size: Math.max(1, sc - 1), color: colors[i % 4] });
+        emit({ x: wx, y: wy - 4 * sc, vx: this.dir * 20, vy: -40, life: 1, size: Math.max(1, sc - 2), glyph: GLYPH_STAR });
+        this.swing = phase;
+        return;
+      }
+      if (tool === "sword") {
+        for (let i = 0; i < 4; i++) emit({ x: rx, y: GROUND() - 13 * sc, vx: rand(-80, 80), vy: rand(-120, -40), g: 500, life: 0.5, size: Math.max(1, sc - 1), color: i % 2 ? "#ffffff" : "#e8d9a8" });
+        this.swing = phase;
+        return;
+      }
       for (let i = 0; i < 5; i++) {
         emit({ x: rx, y: GROUND() - 5 * sc, vx: rand(-60, 60) - this.dir * 40, vy: rand(-180, -80), g: 600, life: 0.7, size: Math.max(1, sc - 1), color: i % 2 ? "#ffd84a" : "#fff3b0" });
       }
@@ -341,10 +361,13 @@ class Pet {
     const blinkRate = s === "attention" ? 6 : s === "working" ? 2 : 1;
     const bulbOn = s === "waiting" ? true : s === "idle" ? false : s === "thinking" ? Math.sin(this.t * 4) > 0 : Math.floor(this.t * blinkRate * 2) % 2 === 0;
 
-    if (pose === "mine") drawRock(ctx, this.x + this.dir * 18 * sc, GROUND(), sc, this.crack);
+    const theme = this.theme;
+    if (pose === "mine") drawTarget(ctx, theme.tool, this.x + this.dir * 18 * sc, GROUND(), sc, this.crack);
 
     this.box = drawPet(ctx, this.x, GROUND(), {
-      palette: makePalette(this.color),
+      theme,
+      frame: Math.floor(this.t * 60),
+      palette: themePalette(theme, this.color),
       scale: sc,
       dir: this.dir,
       pose,
@@ -464,9 +487,17 @@ function visible(list: Agent[]) {
 
 const ZONES = { all: [0.04, 0.96], left: [0.04, 0.42], center: [0.3, 0.7], right: [0.55, 0.97] } as const;
 
+let lastLog = "";
 function setAgents(input: Agent[]) {
   lastAgents = input;
   const list = visible(input);
+  if (import.meta.env.DEV && isTauri) {
+    const line = list.map((a) => `${a.kind}:${a.id.slice(0, 8)}:${a.state}:${a.name.slice(0, 20)}`).join(" | ");
+    if (line !== lastLog) {
+      lastLog = line;
+      import("@tauri-apps/api/core").then(({ invoke }) => invoke("log_js", { msg: `pets: ${line}` }));
+    }
+  }
   const ids = new Set(list.map((a) => a.id));
   for (const [id, pet] of pets) if (!ids.has(id)) pet.leaving = true;
 

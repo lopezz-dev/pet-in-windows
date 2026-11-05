@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Main sessions touched within this window get a pet.
 const MAIN_WINDOW: Duration = Duration::from_secs(3 * 3600);
@@ -61,6 +61,8 @@ struct Live {
     session_id: String,
     name: String,
     status: String,
+    /// When this `claude` process started (ms since epoch).
+    started_at: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -126,21 +128,26 @@ impl Scanner {
         let mut agents = Vec::new();
         for l in live {
             let path = self.find_transcript(&l.session_id);
-            let (facts, age, project_dir) = match &path {
+            let (facts, age, project_dir, written_ms) = match &path {
                 Some(p) => match stat(p) {
                     Some((mtime, len)) => {
                         seen.push(p.clone());
                         let f = self.facts(p, mtime, len);
-                        (f, now.duration_since(mtime).unwrap_or_default(), p.parent().unwrap_or(p).to_path_buf())
+                        let written = mtime.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                        (f, now.duration_since(mtime).unwrap_or_default(), p.parent().unwrap_or(p).to_path_buf(), written)
                     }
-                    None => (Facts::default(), Duration::ZERO, PathBuf::new()),
+                    None => (Facts::default(), Duration::ZERO, PathBuf::new(), 0),
                 },
-                None => (Facts::default(), Duration::ZERO, PathBuf::new()),
+                None => (Facts::default(), Duration::ZERO, PathBuf::new(), 0),
             };
+            // The desktop app spawns a process (briefly "busy") just by opening a
+            // conversation. Only count it as active once it has written something.
+            let resumed_only = l.started_at > 0 && written_ms + 2000 < l.started_at;
             let mut a = build_agent(&l.session_id, None, "main", &facts, age, &project_dir);
             a.name = l.name.clone();
             a.status = l.status.clone();
             a.state = match l.status.as_str() {
+                _ if resumed_only => "waiting",
                 // The process says it's working: trust it over transcript guesses.
                 "busy" => match a.state {
                     "working" | "attention" => "working",
@@ -492,7 +499,8 @@ fn read_registry(claude: &Path) -> Option<Vec<Live>> {
         if session_id.is_empty() || !pid_alive(pid as u32) {
             continue; // stale file from a crashed process
         }
-        out.push(Live { session_id, name: s("name"), status: s("status") });
+        let started_at = v.get("startedAt").and_then(Value::as_u64).unwrap_or(0);
+        out.push(Live { session_id, name: s("name"), status: s("status"), started_at });
     }
     Some(out)
 }

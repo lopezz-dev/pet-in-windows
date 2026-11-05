@@ -254,6 +254,34 @@ legend {
 .styles .bubble::before,
 .styles .bubble::after { display: none; }
 
+/* theme cards */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.theme {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 6px 10px;
+  font: inherit;
+  color: var(--text);
+  text-align: center;
+  background: var(--panel);
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.theme:hover { border-color: var(--muted); }
+.theme.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.theme canvas { width: 96px; height: 72px; image-rendering: pixelated; }
+.theme strong { font: 400 12px/1.2 var(--pixel); }
+.theme span { font-size: 11px; line-height: 1.25; color: var(--muted); }
+
 footer {
   display: flex;
   justify-content: flex-end;

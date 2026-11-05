@@ -1,6 +1,6 @@
 import "./bubbles.css";
 import "./settings.css";
-import { GLYPH_Z, drawAlert, drawGlyph, drawPet, drawRock, drawThought, makePalette, type Pose } from "./art";
+import { GLYPH_Z, THEMES, drawAlert, drawGlyph, drawPet, drawTarget, drawThought, themeOf, themePalette, type Pose, type ThemeDef } from "./art";
 import { DEFAULTS, PRESET_COLORS, loadSettings, onSettings, saveSettings, type Settings } from "./settings";
 
 type PreviewState = "working" | "thinking" | "waiting" | "attention";
@@ -103,7 +103,64 @@ function renderAccent() {
   root.append(customColor(S.bubbleAccent, (c) => update({ bubbleAccent: c })));
 }
 
+// Theme cards: each has its own tiny animated canvas.
+const themeCards: { def: ThemeDef | null; canvas: HTMLCanvasElement; button: HTMLButtonElement }[] = [];
+{
+  const root = $("themes");
+  for (const def of [...THEMES, null]) {
+    const button = document.createElement("button");
+    button.className = "theme";
+    button.dataset.v = def?.id ?? "mix";
+    button.setAttribute("role", "radio");
+    const canvas = document.createElement("canvas");
+    canvas.width = 96;
+    canvas.height = 72;
+    const name = document.createElement("strong");
+    name.textContent = def?.name ?? "Mezcla";
+    const desc = document.createElement("span");
+    desc.textContent = def?.desc ?? "Un tema distinto por conversación";
+    button.append(canvas, name, desc);
+    button.addEventListener("click", () => update({ theme: button.dataset.v! }));
+    root.append(button);
+    themeCards.push({ def, canvas, button });
+  }
+}
+const renderThemes = () =>
+  themeCards.forEach(({ button }) => {
+    const on = button.dataset.v === S.theme;
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-checked", String(on));
+  });
+
+function drawThemeCards() {
+  for (const [i, { def, canvas }] of themeCards.entries()) {
+    const c = canvas.getContext("2d")!;
+    c.imageSmoothingEnabled = false;
+    c.clearRect(0, 0, canvas.width, canvas.height);
+    const th = def ?? THEMES[Math.floor(t / 1.5) % THEMES.length];
+    const color = S.colorMode === "fixed" ? S.color : S.autoColors[i % S.autoColors.length] ?? S.color;
+    drawPet(c, 48, 66, {
+      theme: th,
+      palette: themePalette(th, color),
+      scale: 2,
+      dir: 1,
+      pose: "stand",
+      eyes: Math.sin(t * 1.3 + i) > 0.97 ? "blink" : "open",
+      mouth: "smile",
+      walkPhase: 0,
+      breathe: Math.sin(t * 2.2 + i) > 0.6,
+      bulb: "#7be0a4",
+      bulbOn: true,
+      hat: false,
+      swing: 0,
+      lift: 0,
+      frame: Math.floor(t * 60),
+    });
+  }
+}
+
 const renderers = [
+  renderThemes,
   segmented("colorMode", "colorMode"),
   segmented("bubbleStyle", "bubbleStyle"),
   segmented("bubbleSize", "bubbleSize"),
@@ -225,9 +282,12 @@ function frame(now: number) {
   else if (st === "thinking") pose = "walk";
 
   const color = S.colorMode === "fixed" ? S.color : S.autoColors[Math.floor(t / 3) % S.autoColors.length] ?? S.color;
-  if (pose === "mine") drawRock(ctx, cx + 18 * sc, ground, sc, swing);
+  const theme = S.theme === "mix" ? THEMES[Math.floor(t / 3) % THEMES.length] : themeOf(S.theme);
+  if (pose === "mine") drawTarget(ctx, theme.tool, cx + 18 * sc, ground, sc, swing);
   const box = drawPet(ctx, cx, ground, {
-    palette: makePalette(color),
+    theme,
+    frame: Math.floor(t * 60),
+    palette: themePalette(theme, color),
     scale: sc,
     dir,
     pose,
@@ -263,6 +323,7 @@ function frame(now: number) {
     drawGlyph(ctx, GLYPH_Z, z.x, z.y, Math.max(1, sc - 1));
     ctx.globalAlpha = 1;
   }
+  drawThemeCards();
   requestAnimationFrame(frame);
 }
 
