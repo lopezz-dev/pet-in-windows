@@ -2,8 +2,13 @@
 //! and turns each live session (and each running subagent) into an `Agent`
 //! with a simple state the pets can act out.
 //!
-//! This is purely passive: we only read files Claude Code already writes, so no
-//! configuration is needed. Hooks can make "needs permission" exact later on.
+//! Which sessions exist comes from Claude Code's own process registry,
+//! `~/.claude/sessions/<pid>.json` (one file per running `claude` process, with
+//! its session id, name and `busy`/`idle` status). Transcripts add the details.
+//! Older Claude Code versions without the registry fall back to "recently
+//! modified transcripts".
+//!
+//! This is purely passive: we only read files Claude Code already writes.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -43,7 +48,19 @@ pub struct Agent {
     pub last_prompt: String,
     pub agent_type: String,
     pub description: String,
+    /// Conversation title (from the registry), empty if unknown.
+    pub name: String,
+    /// Raw registry status (`busy`, `idle`, …), empty in fallback mode.
+    pub status: String,
+    /// Time since the transcript was last written.
     pub idle_ms: u64,
+}
+
+/// One entry of `~/.claude/sessions/<pid>.json`.
+struct Live {
+    session_id: String,
+    name: String,
+    status: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -78,19 +95,130 @@ struct Cached {
 }
 
 pub struct Scanner {
+    claude: PathBuf,
     root: PathBuf,
     cache: HashMap<PathBuf, Cached>,
+    /// session id -> transcript path
+    paths: HashMap<String, PathBuf>,
 }
 
 impl Scanner {
     pub fn new() -> Self {
-        Self { root: claude_dir().join("projects"), cache: HashMap::new() }
+        let claude = claude_dir();
+        Self { root: claude.join("projects"), claude, cache: HashMap::new(), paths: HashMap::new() }
     }
 
     pub fn scan(&mut self) -> Vec<Agent> {
+        let mut seen = Vec::new();
+        let mut agents = match read_registry(&self.claude) {
+            Some(live) => self.scan_live(&live, &mut seen),
+            None => self.scan_recent(&mut seen),
+        };
+        self.cache.retain(|p, _| seen.contains(p));
+        // Stable order so pets keep their spot on the taskbar.
+        agents.sort_by(|a, b| a.id.cmp(&b.id));
+        agents
+    }
+
+    /// Registry mode: exactly the sessions whose `claude` process is running.
+    fn scan_live(&mut self, live: &[Live], seen: &mut Vec<PathBuf>) -> Vec<Agent> {
         let now = SystemTime::now();
         let mut agents = Vec::new();
-        let mut seen = Vec::new();
+        for l in live {
+            let path = self.find_transcript(&l.session_id);
+            let (facts, age, project_dir) = match &path {
+                Some(p) => match stat(p) {
+                    Some((mtime, len)) => {
+                        seen.push(p.clone());
+                        let f = self.facts(p, mtime, len);
+                        (f, now.duration_since(mtime).unwrap_or_default(), p.parent().unwrap_or(p).to_path_buf())
+                    }
+                    None => (Facts::default(), Duration::ZERO, PathBuf::new()),
+                },
+                None => (Facts::default(), Duration::ZERO, PathBuf::new()),
+            };
+            let mut a = build_agent(&l.session_id, None, "main", &facts, age, &project_dir);
+            a.name = l.name.clone();
+            a.status = l.status.clone();
+            a.state = match l.status.as_str() {
+                // The process says it's working: trust it over transcript guesses.
+                "busy" => match a.state {
+                    "working" | "attention" => "working",
+                    _ => "thinking",
+                },
+                // Idle with a tool call that never got a result = permission prompt.
+                "idle" => {
+                    if facts.last == Last::AssistantTool {
+                        "attention"
+                    } else {
+                        "waiting"
+                    }
+                }
+                s if ["wait", "permission", "input", "block"].iter().any(|k| s.contains(k)) => "attention",
+                _ => a.state,
+            };
+            if !project_dir.as_os_str().is_empty() {
+                self.subagents(&project_dir, &l.session_id, &a.project, now, seen, &mut agents);
+            }
+            agents.push(a);
+        }
+        agents
+    }
+
+    fn find_transcript(&mut self, session_id: &str) -> Option<PathBuf> {
+        if let Some(p) = self.paths.get(session_id) {
+            if p.exists() {
+                return Some(p.clone());
+            }
+        }
+        let file = format!("{session_id}.jsonl");
+        for dir in fs::read_dir(&self.root).ok()?.flatten() {
+            let candidate = dir.path().join(&file);
+            if candidate.exists() {
+                self.paths.insert(session_id.to_string(), candidate.clone());
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
+    /// Running subagents live in <project>/<session>/subagents/agent-*.jsonl
+    fn subagents(
+        &mut self,
+        project_dir: &Path,
+        session_id: &str,
+        project: &str,
+        now: SystemTime,
+        seen: &mut Vec<PathBuf>,
+        out: &mut Vec<Agent>,
+    ) {
+        let Ok(subs) = fs::read_dir(project_dir.join(session_id).join("subagents")) else { return };
+        for sub in subs.flatten() {
+            let sp = sub.path();
+            if sp.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            let Some((smtime, slen)) = stat(&sp) else { continue };
+            let sage = now.duration_since(smtime).unwrap_or_default();
+            if sage > SUB_WINDOW {
+                continue;
+            }
+            let sfacts = self.facts(&sp, smtime, slen);
+            seen.push(sp.clone());
+            let mut a = build_agent(&stem(&sp), Some(session_id), "sub", &sfacts, sage, project_dir);
+            if matches!(a.state, "waiting" | "idle") {
+                continue; // finished subagent: let it vanish
+            }
+            a.project = project.to_string();
+            read_sub_meta(&sp, &mut a);
+            out.push(a);
+        }
+    }
+
+    /// Fallback for Claude Code versions without the process registry.
+    fn scan_recent(&mut self, seen: &mut Vec<PathBuf>) -> Vec<Agent> {
+        let now = SystemTime::now();
+        let mut agents = Vec::new();
 
         let Ok(projects) = fs::read_dir(&self.root) else { return agents };
         for project in projects.flatten() {
@@ -113,38 +241,10 @@ impl Scanner {
                     continue; // e.g. a file that only holds summaries
                 }
                 let main = build_agent(&session_id, None, "main", &facts, age, &project_dir);
-
-                // Running subagents live in <project>/<session>/subagents/agent-*.jsonl
-                let sub_dir = project_dir.join(&session_id).join("subagents");
-                if let Ok(subs) = fs::read_dir(&sub_dir) {
-                    for sub in subs.flatten() {
-                        let sp = sub.path();
-                        if sp.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                            continue;
-                        }
-                        let Some((smtime, slen)) = stat(&sp) else { continue };
-                        let sage = now.duration_since(smtime).unwrap_or_default();
-                        if sage > SUB_WINDOW {
-                            continue;
-                        }
-                        let sfacts = self.facts(&sp, smtime, slen);
-                        seen.push(sp.clone());
-                        let mut a = build_agent(&stem(&sp), Some(&session_id), "sub", &sfacts, sage, &project_dir);
-                        if matches!(a.state, "waiting" | "idle") {
-                            continue; // finished subagent: let it vanish
-                        }
-                        if a.project.is_empty() {
-                            a.project = main.project.clone();
-                        }
-                        read_sub_meta(&sp, &mut a);
-                        agents.push(a);
-                    }
-                }
+                self.subagents(&project_dir, &session_id, &main.project.clone(), now, seen, &mut agents);
                 agents.push(main);
             }
         }
-
-        self.cache.retain(|p, _| seen.contains(p));
 
         // Keep the screen readable: finished sessions fade out after a while,
         // and at most MAX_PETS main pets are shown (most urgent / recent first).
@@ -160,8 +260,6 @@ impl Scanner {
             None => keep.contains(&a.id),
             Some(p) => keep.contains(p),
         });
-        // Stable order so pets keep their spot on the taskbar.
-        agents.sort_by(|a, b| a.id.cmp(&b.id));
         agents
     }
 
@@ -227,6 +325,8 @@ fn build_agent(
         last_prompt: f.last_prompt.clone(),
         agent_type: String::new(),
         description: String::new(),
+        name: String::new(),
+        status: String::new(),
         idle_ms: age.as_millis() as u64,
     }
 }
@@ -372,6 +472,52 @@ fn read_sub_meta(jsonl: &Path, a: &mut Agent) {
     if let Some(d) = v.get("description").and_then(Value::as_str) {
         a.description = clip(d, 100);
     }
+}
+
+/// Running sessions from `~/.claude/sessions/*.json`. `None` if the registry
+/// doesn't exist (old Claude Code), so the caller can fall back.
+fn read_registry(claude: &Path) -> Option<Vec<Live>> {
+    let dir = fs::read_dir(claude.join("sessions")).ok()?;
+    let mut out = Vec::new();
+    for entry in dir.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&p) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let Some(pid) = v.get("pid").and_then(Value::as_u64) else { continue };
+        let session_id = s("sessionId");
+        if session_id.is_empty() || !pid_alive(pid as u32) {
+            continue; // stale file from a crashed process
+        }
+        out.push(Live { session_id, name: s("name"), status: s("status") });
+    }
+    Some(out)
+}
+
+#[cfg(windows)]
+fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    unsafe {
+        let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if h.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code);
+        CloseHandle(h);
+        ok != 0 && code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(windows))]
+fn pid_alive(pid: u32) -> bool {
+    Path::new(&format!("/proc/{pid}")).exists() || cfg!(target_os = "macos")
 }
 
 fn claude_dir() -> PathBuf {

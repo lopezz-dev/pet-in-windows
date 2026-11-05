@@ -1,4 +1,6 @@
-import { BODY_COLORS, GLYPHS, SPRITES, drawGrid, drawPickaxe, type Grid } from "./sprites";
+import "./bubbles.css";
+import { GLYPH_HEART, GLYPH_STAR, GLYPH_Z, drawAlert, drawGlyph, drawPet, drawRock, drawThought, makePalette, type Eyes, type Mouth, type Pose } from "./art";
+import { DEFAULTS, isTauri, loadSettings, onSettings, type Settings } from "./settings";
 
 // ---------------------------------------------------------------------------
 // Types shared with the Rust side (src-tauri/src/sessions.rs)
@@ -18,10 +20,12 @@ interface Agent {
   lastPrompt: string;
   agentType: string;
   description: string;
+  name: string;
+  status: string;
   idleMs: number;
 }
 
-const isTauri = "__TAURI_INTERNALS__" in window;
+let S: Settings = { ...DEFAULTS };
 
 // ---------------------------------------------------------------------------
 // Stage
@@ -31,22 +35,6 @@ const ctx = canvas.getContext("2d")!;
 const bubbleLayer = document.getElementById("bubbles")!;
 let W = 0;
 let H = 0;
-
-function resize() {
-  const r = canvas.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const firstLayout = W === 0;
-  W = r.width;
-  H = r.height;
-  canvas.width = Math.round(W * dpr);
-  canvas.height = Math.round(H * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  // Re-spread homes for the new width.
-  if (pets.size) setAgents([...pets.values()].filter((p) => !p.leaving).map((p) => p.agent));
-  if (firstLayout) for (const p of pets.values()) p.x = p.homeX + rand(-40, 40);
-}
-new ResizeObserver(resize).observe(canvas);
 
 const GROUND = () => H - 1; // feet touch the top of the taskbar
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -58,62 +46,125 @@ function hash(s: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Particles: sparks, rock chips, Zzz, confetti, sweat
+// ---------------------------------------------------------------------------
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  g: number;
+  life: number;
+  max: number;
+  size: number;
+  color?: string;
+  glyph?: string[];
+}
+const particles: Particle[] = [];
+
+function emit(p: Partial<Particle> & { x: number; y: number }) {
+  if (particles.length > 400) return;
+  particles.push({ vx: 0, vy: 0, g: 0, life: 1, size: 2, ...p, max: p.life ?? 1 });
+}
+
+function updateParticles(dt: number) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0 || p.y > H + 10) {
+      particles.splice(i, 1);
+      continue;
+    }
+    p.vy += p.g * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    if (p.g > 0 && p.y > GROUND() - p.size) {
+      p.y = GROUND() - p.size;
+      p.vy *= -0.35;
+      p.vx *= 0.6;
+    }
+    ctx.globalAlpha = Math.min(1, (p.life / p.max) * 2);
+    if (p.glyph) drawGlyph(ctx, p.glyph, p.x, p.y, p.size);
+    else {
+      ctx.fillStyle = p.color ?? "#fff";
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), p.size, p.size);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------------------------------------------------------------------
 // Pets
 // ---------------------------------------------------------------------------
 type Mode = "walk" | "pause" | "mine" | "sleep";
+const BULB: Record<AgentState, string> = {
+  working: "#ffd84a",
+  thinking: "#b892ff",
+  waiting: "#7be0a4",
+  attention: "#ff4d5e",
+  idle: "#7a7a88",
+};
 
 class Pet {
   agent: Agent;
   x: number;
   dir: 1 | -1 = 1;
-  jumpY = 0;
+  lift = 0;
   vy = 0;
+  landT = 0;
   mode: Mode = "walk";
   modeT = 0;
   targetX: number;
   t = Math.random() * 10;
   blinkT = rand(2, 5);
-  scale: number;
-  colors: [string, string];
   homeX = 0;
+  range = 150;
   bubble: HTMLDivElement;
   pinned = false;
   noteUntil = 0;
   note = "";
+  happyUntil = 0;
   hovered = false;
   leaving = false;
   alpha = 0;
+  swing = 0;
+  crack = 0;
+  nextZ = 0;
+  box = { x: 0, y: 0, w: 0, h: 0, headY: 0 };
 
   constructor(agent: Agent, x: number) {
     this.agent = agent;
     this.x = x;
     this.targetX = x;
-    this.scale = agent.kind === "sub" ? 2 : 3;
-    this.colors = BODY_COLORS[hash(agent.kind === "sub" ? agent.parentId ?? agent.id : agent.id) % BODY_COLORS.length];
     this.bubble = document.createElement("div");
     this.bubble.className = "bubble";
     bubbleLayer.appendChild(this.bubble);
   }
 
-  get w() {
-    return 16 * this.scale;
+  get scale() {
+    return this.agent.kind === "sub" ? Math.max(1, S.scale - 1) : S.scale;
   }
-  get h() {
-    return 12 * this.scale;
+  get color() {
+    if (S.colorMode === "fixed") return S.color;
+    const key = this.agent.kind === "sub" ? (this.agent.parentId ?? this.agent.id) : this.agent.id;
+    const list = S.autoColors.length ? S.autoColors : DEFAULTS.autoColors;
+    return list[hash(key) % list.length];
+  }
+  get speed() {
+    return S.speed;
   }
 
   setAgent(next: Agent) {
     const prev = this.agent.state;
     this.agent = next;
-    if (prev !== next.state) {
-      if (next.state === "waiting" && (prev === "working" || prev === "thinking")) {
-        this.say("¡Listo!", 6000);
-        this.hop();
-      }
-      if (next.state === "attention") this.hop();
-      this.mode = "walk";
-      this.pickTarget();
+    if (prev === next.state) return;
+    if (next.state === "waiting" && (prev === "working" || prev === "thinking") && S.celebrate) {
+      this.say("¡Listo!", 6000);
+      this.celebrate();
     }
+    if (next.state === "attention") this.hop();
+    this.mode = "walk";
+    this.pickTarget();
   }
 
   say(text: string, ms: number) {
@@ -121,64 +172,83 @@ class Pet {
     this.noteUntil = performance.now() + ms;
   }
 
-  hop(power = 260) {
-    if (this.jumpY === 0) this.vy = power;
+  celebrate() {
+    this.hop(300);
+    this.happyUntil = performance.now() + 2500;
+    const top = GROUND() - 20 * this.scale;
+    const colors = ["#ffd84a", "#ff5d73", "#7be0a4", "#6aa6ff", "#ffffff"];
+    for (let i = 0; i < 26; i++) {
+      emit({ x: this.x, y: top, vx: rand(-110, 110), vy: rand(-260, -120), g: 520, life: rand(1, 1.8), size: Math.max(2, this.scale - 1), color: colors[i % colors.length] });
+    }
+    for (let i = 0; i < 3; i++) {
+      emit({ x: this.x + rand(-20, 20), y: top - 10, vx: rand(-20, 20), vy: rand(-60, -30), life: 1.4, size: Math.max(1, this.scale - 1), glyph: i % 2 ? GLYPH_STAR : GLYPH_HEART });
+    }
   }
 
-  pickTarget(range = 160) {
-    this.targetX = Math.max(this.w, Math.min(W - this.w, this.homeX + rand(-range, range)));
+  hop(power = 260) {
+    if (this.lift === 0) this.vy = power;
+  }
+
+  pickTarget(range = this.range) {
+    const half = 12 * this.scale;
+    this.targetX = Math.max(half, Math.min(W - half, this.homeX + rand(-range, range)));
   }
 
   update(dt: number, parent?: Pet) {
     this.t += dt;
     this.modeT -= dt;
+    this.landT -= dt;
     this.alpha = Math.min(1, this.alpha + dt * 2);
 
-    // Gravity for hops.
-    if (this.jumpY > 0 || this.vy > 0) {
+    // Gravity for hops, with a squash on landing.
+    if (this.lift > 0 || this.vy > 0) {
       this.vy -= 900 * dt;
-      this.jumpY = Math.max(0, this.jumpY + this.vy * dt);
-      if (this.jumpY === 0) this.vy = 0;
+      this.lift = Math.max(0, this.lift + this.vy * dt);
+      if (this.lift === 0) {
+        this.vy = 0;
+        this.landT = 0.12;
+      }
     }
 
-    // Leaving pets walk off-screen, then get removed.
     if (this.leaving) {
       this.alpha -= dt * 1.5;
       return;
     }
 
+    this.blinkT -= dt;
+    if (this.blinkT < -0.14) this.blinkT = rand(2, 5);
+
     // Hovering freezes the pet so you can read its bubble.
-    if (this.hovered || this.pinned) {
-      this.blinkT -= dt;
-      if (this.blinkT < -0.15) this.blinkT = rand(2, 5);
-      return;
-    }
+    if (this.hovered || this.pinned) return;
 
     const s = this.agent.state;
     if (this.agent.kind === "sub" && parent) {
-      this.homeX = parent.x + (hash(this.agent.id) % 2 ? 1 : -1) * (40 + (hash(this.agent.id) % 40));
+      this.homeX = parent.x + (hash(this.agent.id) % 2 ? 1 : -1) * (36 + (hash(this.agent.id) % 40));
     }
 
     switch (s) {
       case "working": {
-        // Walk somewhere, mine for a bit, repeat.
-        if (this.mode === "walk" && this.arrive(dt, 70)) {
+        if (this.mode === "walk" && this.arrive(dt, 75)) {
           this.mode = "mine";
-          this.modeT = rand(2, 4);
+          this.modeT = rand(2.5, 5);
+          this.crack = 0;
         } else if (this.mode !== "walk" && this.modeT <= 0) {
           this.mode = "walk";
-          this.pickTarget(this.agent.kind === "sub" ? 30 : 200);
+          this.pickTarget(this.agent.kind === "sub" ? 30 : this.range);
+        }
+        if (this.mode === "mine") this.mine();
+        if (Math.random() < dt * 0.4) {
+          emit({ x: this.x - this.dir * 8 * this.scale, y: this.box.headY + 2 * this.scale, vx: -this.dir * 30, vy: -40, g: 300, life: 0.8, size: this.scale, color: "#8fd3ff" });
         }
         break;
       }
       case "thinking": {
-        // Slow pacing with pauses.
         if (this.mode === "walk" && this.arrive(dt, 30)) {
           this.mode = "pause";
           this.modeT = rand(1, 2.5);
         } else if (this.mode !== "walk" && this.modeT <= 0) {
           this.mode = "walk";
-          this.pickTarget(120);
+          this.pickTarget(this.range * 0.7);
         }
         break;
       }
@@ -188,8 +258,8 @@ class Pet {
           if (this.arrive(dt, 90)) this.mode = "pause";
         } else {
           this.mode = "pause";
-          if (this.jumpY === 0 && this.modeT <= 0) {
-            this.hop(220);
+          if (this.lift === 0 && this.modeT <= 0) {
+            this.hop(230);
             this.modeT = 0.9;
           }
         }
@@ -200,13 +270,31 @@ class Pet {
         if (this.mode !== "sleep") {
           this.targetX = this.homeX;
           if (this.arrive(dt, 45)) this.mode = "sleep";
+        } else if (performance.now() > this.nextZ) {
+          this.nextZ = performance.now() + 1400;
+          const sc = Math.max(1, this.scale - 1);
+          emit({ x: this.x + this.dir * 6 * this.scale, y: this.box.headY - 2 * sc, vx: this.dir * 12, vy: -22, life: 2.6, size: sc, glyph: GLYPH_Z });
         }
         break;
       }
     }
+  }
 
-    this.blinkT -= dt;
-    if (this.blinkT < -0.15) this.blinkT = rand(2, 5);
+  private mine() {
+    const phase = Math.floor(this.t * 6) % 4;
+    if (phase === 3 && this.swing !== 3) {
+      // Strike!
+      const sc = this.scale;
+      const rx = this.x + this.dir * 18 * sc;
+      this.crack = (this.crack + 1) % 4;
+      for (let i = 0; i < 5; i++) {
+        emit({ x: rx, y: GROUND() - 5 * sc, vx: rand(-60, 60) - this.dir * 40, vy: rand(-180, -80), g: 600, life: 0.7, size: Math.max(1, sc - 1), color: i % 2 ? "#ffd84a" : "#fff3b0" });
+      }
+      for (let i = 0; i < 2; i++) {
+        emit({ x: rx, y: GROUND() - 4 * sc, vx: rand(-40, 40), vy: rand(-140, -60), g: 700, life: 1.2, size: sc, color: "#8a8c99" });
+      }
+    }
+    this.swing = phase;
   }
 
   /** Move toward targetX; returns true when there. */
@@ -214,84 +302,67 @@ class Pet {
     const d = this.targetX - this.x;
     if (Math.abs(d) < 2) return true;
     this.dir = d > 0 ? 1 : -1;
-    this.x += Math.sign(d) * Math.min(Math.abs(d), speed * dt);
+    this.x += Math.sign(d) * Math.min(Math.abs(d), speed * this.speed * dt);
     return false;
-  }
-
-  bounds() {
-    const top = GROUND() - this.h - this.jumpY;
-    return { x: this.x - this.w / 2, y: top, w: this.w, h: this.h };
   }
 
   draw(now: number) {
     const s = this.agent.state;
     const sc = this.scale;
-    const b = this.bounds();
-    ctx.globalAlpha = Math.max(0, this.alpha) * (s === "idle" ? 0.6 : 1);
+    const still = this.hovered || this.pinned;
+    ctx.globalAlpha = Math.max(0, this.alpha) * (s === "idle" ? 0.65 : 1);
 
-    // Shadow
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    const shadowW = this.w * (0.8 - Math.min(this.jumpY, 40) / 120);
-    ctx.fillRect(Math.round(this.x - shadowW / 2), GROUND() - sc / 2, shadowW, sc / 2 + 1);
+    // Soft pixel shadow that shrinks while airborne.
+    const shadowW = Math.round((18 - Math.min(this.lift / sc, 10)) * 0.9);
+    ctx.fillStyle = "rgba(0,0,0,0.28)";
+    ctx.fillRect(Math.round(this.x - (shadowW * sc) / 2), GROUND() - sc + 1, shadowW * sc, sc);
+    ctx.fillRect(Math.round(this.x - ((shadowW - 4) * sc) / 2), GROUND() - sc * 2 + 1, (shadowW - 4) * sc, sc);
 
-    let grid: Grid;
-    let bob = 0;
-    if (this.mode === "sleep") {
-      grid = SPRITES.sleep;
-      bob = Math.sin(this.t * 2) > 0.6 ? -1 : 0;
-    } else if (s === "attention") {
-      grid = SPRITES.shout;
-    } else if (this.mode === "walk" && !this.hovered && !this.pinned) {
-      const fast = s === "working" ? 7 : 4;
-      const step = Math.floor(this.t * fast) % 2;
-      grid = step ? SPRITES.standB : SPRITES.standA;
-      bob = step ? -1 : 0;
-    } else {
-      grid = this.blinkT < 0 ? SPRITES.blink : SPRITES.standA;
-    }
-    drawGrid(ctx, grid, b.x, b.y + bob * sc, sc, this.colors);
+    let pose: Pose = "stand";
+    if (this.mode === "sleep" && !still) pose = "sleep";
+    else if (this.lift > 0) pose = "jump";
+    else if (this.landT > 0) pose = "land";
+    else if (this.mode === "mine" && s === "working" && !still) pose = "mine";
+    else if (this.mode === "walk" && !still && Math.abs(this.targetX - this.x) > 2) pose = "walk";
+
+    const happy = now < this.happyUntil || this.hovered;
+    let eyes: Eyes = "open";
+    if (pose === "sleep") eyes = "closed";
+    else if (s === "attention") eyes = "wide";
+    else if (happy) eyes = "happy";
+    else if (this.blinkT < 0) eyes = "blink";
+
+    let mouth: Mouth = "smile";
+    if (s === "attention") mouth = "open";
+    else if (pose === "sleep") mouth = Math.sin(this.t * 2.2) > 0.3 ? "o" : "flat";
+    else if (pose === "mine") mouth = "flat";
+    else if (s === "thinking") mouth = "flat";
+
+    const blinkRate = s === "attention" ? 6 : s === "working" ? 2 : 1;
+    const bulbOn = s === "waiting" ? true : s === "idle" ? false : s === "thinking" ? Math.sin(this.t * 4) > 0 : Math.floor(this.t * blinkRate * 2) % 2 === 0;
+
+    if (pose === "mine") drawRock(ctx, this.x + this.dir * 18 * sc, GROUND(), sc, this.crack);
+
+    this.box = drawPet(ctx, this.x, GROUND(), {
+      palette: makePalette(this.color),
+      scale: sc,
+      dir: this.dir,
+      pose,
+      eyes,
+      mouth,
+      walkPhase: Math.floor(this.t * (s === "working" ? 10 : 6)) % 4,
+      breathe: Math.sin(this.t * 2.2) > 0.6,
+      bulb: BULB[s],
+      bulbOn,
+      hat: S.hat && s === "working",
+      swing: this.swing,
+      lift: Math.round(this.lift / sc) * sc,
+    });
 
     // --- Overlays by state ---
-    const headY = b.y;
-    if (this.mode === "mine" && s === "working") {
-      // 3 chunky swing steps, strike on the last one.
-      const phase = Math.floor(this.t * 6) % 4;
-      const angles = [1.9, 1.3, 0.6, 0.6];
-      const gx = this.x + this.dir * (this.w / 2 - sc);
-      const gy = b.y + 7 * sc;
-      drawPickaxe(ctx, gx, gy, angles[phase], this.dir, sc);
-      // Rock + sparks
-      const rockX = this.x + this.dir * (this.w / 2 + 7 * sc);
-      ctx.fillStyle = "#7d7d86";
-      ctx.fillRect(Math.round(rockX - 2 * sc), GROUND() - 3 * sc, 4 * sc, 3 * sc);
-      ctx.fillStyle = "#9a9aa3";
-      ctx.fillRect(Math.round(rockX - 2 * sc), GROUND() - 3 * sc, 2 * sc, sc);
-      if (phase >= 2) drawGrid(ctx, GLYPHS.spark, rockX - 1.5 * sc + rand(-sc, sc), GROUND() - 7 * sc, sc - 1 || 1);
-      // Sweat drop now and then
-      if (Math.floor(this.t * 1.5) % 3 === 0) {
-        ctx.fillStyle = "#7cc4ff";
-        ctx.fillRect(Math.round(this.x - this.dir * (this.w / 2 - 2 * sc)), headY + 2 * sc + ((this.t * 20) % (3 * sc)), sc, sc);
-      }
-    }
-    if (s === "thinking") {
-      // Thought dots: 3 dots blinking in sequence above the head.
-      const n = Math.floor(this.t * 3) % 4;
-      for (let i = 0; i < n; i++) {
-        drawGrid(ctx, [".ww.", "wwww", "wwww", ".ww."], this.x - 6 * sc + i * 5 * sc, headY - 6 * sc, Math.max(1, sc - 1));
-      }
-    }
-    if (this.mode === "sleep") {
-      // Zzz drifting up.
-      for (let i = 0; i < 3; i++) {
-        const p = (this.t * 0.5 + i / 3) % 1;
-        ctx.globalAlpha = Math.max(0, this.alpha) * (1 - p);
-        drawGrid(ctx, GLYPHS.z, this.x + this.w / 3 + p * 6 * sc, headY + 2 * sc - p * 14 * sc, Math.max(1, sc - 1 - (i === 0 ? 0 : 1)));      }
-      ctx.globalAlpha = Math.max(0, this.alpha);
-    }
-    if (s === "attention") {
-      const blink = Math.floor(now / 300) % 2;
-      if (blink) drawGrid(ctx, GLYPHS.bang, this.x - sc, headY - 7 * sc, sc);
-    }
+    const headY = this.box.headY;
+    if (s === "thinking" && !still) drawThought(ctx, this.x, headY, this.dir, sc, this.t);
+    if (s === "attention") drawAlert(ctx, this.x, headY, sc, now);
     ctx.globalAlpha = 1;
   }
 
@@ -300,37 +371,39 @@ class Pet {
     const showInfo = this.hovered || this.pinned;
     const showNote = !showInfo && (now < this.noteUntil || a.state === "attention");
     const el = this.bubble;
-    if (!showInfo && !showNote) {
-      el.classList.remove("show");
-      return;
-    }
+    el.className = `bubble style-${S.bubbleStyle} size-${S.bubbleSize}`;
+    el.style.setProperty("--accent", S.bubbleAccent);
+    if (!showInfo && !showNote) return;
+
     let html: string;
     if (showInfo) {
-      const title = a.kind === "sub" ? `${a.agentType || "subagente"} · ${a.project}` : `${a.project}${a.branch ? " · " + a.branch : ""}`;
-      const detail =
-        a.kind === "sub"
+      const title = a.kind === "sub" ? a.agentType || "Subagente" : a.name || a.project;
+      const sub = [a.project, a.branch].filter(Boolean).join(" · ");
+      const detail = !S.bubbleDetail
+        ? ""
+        : a.kind === "sub"
           ? a.description
           : a.state === "waiting"
             ? a.lastText
             : a.lastPrompt
               ? "Tarea: " + a.lastPrompt
               : "";
-      html = `<div class="title">${esc(title)}</div><div class="status ${a.state}">${esc(statusText(a))}</div>${
-        detail ? `<div class="detail">${esc(detail)}</div>` : ""
-      }`;
-      el.classList.remove("mini");
+      html =
+        `<div class="title">${esc(title)}</div>` +
+        (sub && sub !== title ? `<div class="sub">${esc(sub)}</div>` : "") +
+        `<div class="status ${a.state}"><span class="dot"></span>${esc(statusText(a))}</div>` +
+        (detail ? `<div class="detail">${esc(detail)}</div>` : "");
     } else {
       html = esc(a.state === "attention" ? "¡Te necesito!" : this.note);
       el.classList.add("mini");
     }
     if (el.innerHTML !== html) el.innerHTML = html;
     el.classList.add("show");
-    const b = this.bounds();
     const half = el.offsetWidth / 2;
     const left = Math.max(half + 4, Math.min(W - half - 8, this.x));
     el.style.left = `${left}px`;
-    el.style.top = `${b.y - el.offsetHeight - 14}px`;
-    el.style.bottom = "auto";
+    const above = a.state === "attention" && !showInfo ? 15 * this.scale : a.state === "thinking" ? 6 * this.scale : 0;
+    el.style.top = `${Math.max(2, this.box.y - el.offsetHeight - 10 - above)}px`;
   }
 
   destroy() {
@@ -341,11 +414,11 @@ class Pet {
 function statusText(a: Agent) {
   switch (a.state) {
     case "working":
-      return `Trabajando: ${a.activity || "…"}`;
+      return `Trabajando · ${a.activity || "…"}`;
     case "thinking":
       return "Pensando…";
     case "waiting":
-      return "Terminé — esperando tu respuesta";
+      return "Terminé, esperando tu respuesta";
     case "attention":
       return `¡Necesito tu permiso! ${a.activity}`;
     case "idle":
@@ -358,29 +431,60 @@ function esc(s: string) {
 }
 
 // ---------------------------------------------------------------------------
-// World: reconcile agents -> pets
+// World: which agents get a pet, and where they live
 // ---------------------------------------------------------------------------
 const pets = new Map<string, Pet>();
 let demo = !isTauri;
-let realAgents: Agent[] = [];
+let lastAgents: Agent[] = [];
+/** Last time each session was seen doing something. */
+const lastActive = new Map<string, number>();
 
-function setAgents(list: Agent[]) {
+const ACTIVE: AgentState[] = ["working", "thinking", "attention"];
+const PRIORITY: Record<AgentState, number> = { attention: 0, working: 1, thinking: 1, waiting: 2, idle: 3 };
+
+function visible(list: Agent[]) {
+  const now = Date.now();
+  for (const a of list) if (ACTIVE.includes(a.state)) lastActive.set(a.id, now);
+  const keepFor = S.idleMinutes * 60_000;
+  const mains = list
+    .filter((a) => a.kind === "main")
+    .filter((a) => {
+      if (ACTIVE.includes(a.state) || S.showAllOpen) return true;
+      const seen = lastActive.get(a.id);
+      if (seen !== undefined) return now - seen < keepFor;
+      // Fallback mode (old Claude Code, no registry): use transcript age.
+      return !a.status && a.idleMs < keepFor;
+    })
+    .sort((a, b) => PRIORITY[a.state] - PRIORITY[b.state] || a.idleMs - b.idleMs)
+    .slice(0, Math.max(1, S.maxPets));
+  const ids = new Set(mains.map((a) => a.id));
+  const subs = S.showSubagents ? list.filter((a) => a.kind === "sub" && a.parentId && ids.has(a.parentId)) : [];
+  return [...mains.sort((a, b) => a.id.localeCompare(b.id)), ...subs];
+}
+
+const ZONES = { all: [0.04, 0.96], left: [0.04, 0.42], center: [0.3, 0.7], right: [0.55, 0.97] } as const;
+
+function setAgents(input: Agent[]) {
+  lastAgents = input;
+  const list = visible(input);
   const ids = new Set(list.map((a) => a.id));
   for (const [id, pet] of pets) if (!ids.has(id)) pet.leaving = true;
 
   const mains = list.filter((a) => a.kind === "main");
+  const [z0, z1] = ZONES[S.zone] ?? ZONES.right;
+  const slot = ((z1 - z0) * W) / (mains.length + 1);
   mains.forEach((a, i) => {
-    // Spread homes evenly across the right 2/3 of the screen.
-    const home = W * (0.33 + (0.62 * (i + 1)) / (mains.length + 1));
+    const home = W * z0 + slot * (i + 1);
     let pet = pets.get(a.id);
     if (!pet || pet.leaving) {
       pet?.destroy();
-      pet = new Pet(a, home + rand(-40, 40));
+      pet = new Pet(a, home + rand(-30, 30));
       pets.set(a.id, pet);
     } else {
       pet.setAgent(a);
     }
     pet.homeX = home;
+    pet.range = Math.max(30, Math.min(170, slot * 0.6));
   });
   for (const a of list.filter((a) => a.kind === "sub")) {
     let pet = pets.get(a.id);
@@ -395,6 +499,21 @@ function setAgents(list: Agent[]) {
     }
   }
 }
+
+function resize() {
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const firstLayout = W === 0;
+  W = r.width;
+  H = r.height;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  setAgents(lastAgents);
+  if (firstLayout) for (const p of pets.values()) p.x = p.homeX + rand(-30, 30);
+}
+new ResizeObserver(resize).observe(canvas);
 
 // ---------------------------------------------------------------------------
 // Hover / click-through
@@ -411,20 +530,18 @@ async function setClickThrough(ignore: boolean) {
   }
 }
 
-function inRect(p: { x: number; y: number }, r: { x: number; y: number; w: number; h: number }, pad = 0) {
-  return p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
-}
+type Rect = { x: number; y: number; w: number; h: number };
+const inRect = (p: { x: number; y: number }, r: Rect, pad = 0) =>
+  p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
 
 function updateHover() {
   let any = false;
-  // Topmost first so only one pet reacts.
-  const ordered = [...pets.values()].reverse();
   let taken = false;
-  for (const pet of ordered) {
+  for (const pet of [...pets.values()].reverse()) {
     let over = false;
     if (!taken && !pet.leaving) {
-      over = inRect(cursor, pet.bounds(), 6);
-      if (!over && pet.bubble.classList.contains("show") && (pet.hovered || pet.pinned)) {
+      over = inRect(cursor, pet.box, 4);
+      if (!over && (pet.hovered || pet.pinned) && pet.bubble.classList.contains("show")) {
         const r = pet.bubble.getBoundingClientRect();
         const c = canvas.getBoundingClientRect();
         over = inRect(cursor, { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height + 16 }, 4);
@@ -438,21 +555,32 @@ function updateHover() {
   setClickThrough(!any);
 }
 
-function petAt(p: { x: number; y: number }) {
-  return [...pets.values()].reverse().find((pet) => !pet.leaving && inRect(p, pet.bounds(), 6));
+function petAt(e: MouseEvent) {
+  const r = canvas.getBoundingClientRect();
+  const p = { x: e.clientX - r.left, y: e.clientY - r.top };
+  return [...pets.values()].reverse().find((pet) => !pet.leaving && inRect(p, pet.box, 4));
 }
 
 canvas.addEventListener("mousedown", (e) => {
-  const r = canvas.getBoundingClientRect();
-  const pet = petAt({ x: e.clientX - r.left, y: e.clientY - r.top });
+  if (e.button !== 0) return;
+  const pet = petAt(e);
   if (pet) {
     pet.hop();
     pet.pinned = !pet.pinned;
   }
 });
+canvas.addEventListener("contextmenu", async (e) => {
+  e.preventDefault();
+  if (!petAt(e)) return;
+  if (isTauri) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    invoke("open_settings");
+  } else {
+    window.open("/settings.html", "_blank");
+  }
+});
 
 if (!isTauri) {
-  // Browser preview: real mouse events instead of the Rust cursor feed.
   window.addEventListener("mousemove", (e) => {
     const r = canvas.getBoundingClientRect();
     cursor = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -462,66 +590,64 @@ if (!isTauri) {
 // ---------------------------------------------------------------------------
 // Demo mode (tray menu, or automatically in a normal browser)
 // ---------------------------------------------------------------------------
-const DEMO: Agent[] = [
-  mk("demo-1", "pet_in_windows", "working", "Edit sessions.rs"),
-  mk("demo-2", "huginnDB", "thinking", ""),
-  mk("demo-3", "aboutme", "waiting", ""),
-  mk("demo-4", "bitacora", "attention", "Bash npm run deploy"),
-  { ...mk("demo-sub", "pet_in_windows", "working", "Grep cursor_position"), kind: "sub", parentId: "demo-1", agentType: "Explore", description: "Find how Tauri reports the cursor" },
-];
-function mk(id: string, project: string, state: AgentState, activity: string): Agent {
+function mk(id: string, name: string, project: string, state: AgentState, activity: string): Agent {
   return {
-    id, parentId: null, kind: "main", project, cwd: "", branch: "main", state, activity,
+    id, parentId: null, kind: "main", project, cwd: "", branch: "main", state, activity, name, status: "busy",
     lastText: "He terminado la refactorización y los tests pasan. ¿Quieres que lo suba?",
     lastPrompt: "Refactoriza el lector de sesiones y añade tests", agentType: "", description: "", idleMs: 0,
   };
 }
+const DEMO: Agent[] = [
+  mk("demo-1", "Mascota en la barra de tareas", "pet_in_windows", "working", "Edit sessions.rs"),
+  mk("demo-2", "Revisión nota de planificación", "muninn", "thinking", ""),
+  mk("demo-3", "Migraciones de seguridad", "muninn", "waiting", ""),
+  mk("demo-4", "Deploy de la landing", "aboutme", "attention", "Bash npm run deploy"),
+  { ...mk("demo-sub", "", "pet_in_windows", "working", "Grep cursor_position"), kind: "sub", parentId: "demo-1", agentType: "Explore", description: "Find how Tauri reports the cursor" },
+];
 let demoTick = 0;
-function demoStep() {
+setInterval(() => {
+  if (!demo) return;
   demoTick++;
   const states: AgentState[] = ["working", "thinking", "working", "waiting", "attention"];
   DEMO.forEach((a, i) => {
     if (a.kind === "main" && demoTick % 3 === i % 3) a.state = states[(demoTick + i) % states.length];
   });
-}
-setInterval(() => {
-  if (!demo) return;
-  demoStep();
   setAgents(DEMO.map((a) => ({ ...a })));
 }, 7000);
 
 // ---------------------------------------------------------------------------
-// Tauri wiring
+// Wiring
 // ---------------------------------------------------------------------------
+S = await loadSettings();
+onSettings((s) => {
+  S = s;
+  setAgents(lastAgents);
+});
+
 if (isTauri) {
   const { invoke } = await import("@tauri-apps/api/core");
   const log = (msg: string) => invoke("log_js", { msg }).catch(() => {});
   window.addEventListener("error", (e) => log(`error: ${e.message} @ ${e.filename}:${e.lineno}`));
   window.addEventListener("unhandledrejection", (e) => log(`rejection: ${String(e.reason)}`));
-  document.addEventListener("visibilitychange", () => log(`visibility: ${document.visibilityState}`));
-  if (import.meta.env.DEV) {
-    setInterval(() => log(`alive: pets=${pets.size} W=${W} H=${H} vis=${document.visibilityState}`), 30000);
-  }
   const { listen } = await import("@tauri-apps/api/event");
   await listen<Agent[]>("agents", (e) => {
-    realAgents = e.payload;
-    if (!demo) setAgents(realAgents);
+    if (!demo) setAgents(e.payload);
   });
   await listen<{ x: number; y: number }>("cursor", (e) => {
     cursor = e.payload;
   });
   await listen("toggle-demo", () => {
     demo = !demo;
-    setAgents(demo ? DEMO.map((a) => ({ ...a })) : realAgents);
+    if (demo) setAgents(DEMO.map((a) => ({ ...a })));
   });
 } else {
   document.body.classList.add("browser");
 }
+if (demo) setAgents(DEMO.map((a) => ({ ...a })));
 
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
-if (demo) setAgents(DEMO.map((a) => ({ ...a })));
 let last = performance.now();
 function frame(now: number) {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -539,6 +665,7 @@ function frame(now: number) {
     pet.draw(now);
     pet.renderBubble(now);
   }
+  updateParticles(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

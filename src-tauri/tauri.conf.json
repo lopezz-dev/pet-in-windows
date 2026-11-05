@@ -23,6 +23,17 @@
         "resizable": false,
         "shadow": false,
         "focus": false
+      },
+      {
+        "label": "settings",
+        "title": "Pet in Windows · Ajustes",
+        "url": "settings.html",
+        "width": 920,
+        "height": 680,
+        "minWidth": 720,
+        "minHeight": 520,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {

@@ -1,0 +1,128 @@
+/* ---------------------------------------------------------------- bubbles */
+.bubble {
+  --accent: #d97757;
+  --fs: 12px;
+  position: absolute;
+  max-width: 280px;
+  min-width: 130px;
+  padding: 7px 9px 8px;
+  font: var(--fs) / 1.35 "Cascadia Mono", Consolas, "Courier New", monospace;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  display: none;
+  box-sizing: border-box;
+}
+.bubble.size-S { --fs: 11px; max-width: 240px; }
+.bubble.size-L { --fs: 14px; max-width: 340px; }
+.bubble.show { display: block; animation: pop 0.14s steps(3); }
+.bubble.mini { min-width: 0; font-weight: 700; white-space: nowrap; }
+
+.bubble .title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bubble .sub { font-size: 0.85em; opacity: 0.65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bubble .status { margin-top: 4px; display: flex; gap: 6px; align-items: baseline; }
+.bubble .dot { flex: none; width: 7px; height: 7px; background: currentColor; transform: translateY(-1px); }
+.bubble .status.working { color: #c4651f; }
+.bubble .status.thinking { color: #7550cc; }
+.bubble .status.waiting { color: #2d8a52; }
+.bubble .status.attention { color: #d62839; font-weight: 700; }
+.bubble .status.idle { color: #777; }
+.bubble .detail {
+  margin-top: 5px;
+  opacity: 0.75;
+  font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* tail (a square rotated 45° looks wrong in pixel style, so it's 2 steps) */
+.bubble::after,
+.bubble::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* Pixel: chunky ink border, hard offset shadow, stepped tail */
+.bubble.style-pixel {
+  background: #fff8ec;
+  color: #1d1a22;
+  border: 3px solid #1d1a22;
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--accent) 35%, transparent), 4px 4px 0 #1d1a22;
+}
+.bubble.style-pixel .title { color: color-mix(in srgb, var(--accent) 70%, #1d1a22); }
+.bubble.style-pixel::before {
+  bottom: -9px;
+  width: 12px;
+  height: 6px;
+  background: #1d1a22;
+}
+.bubble.style-pixel::after {
+  bottom: -15px;
+  width: 6px;
+  height: 6px;
+  background: #1d1a22;
+}
+
+/* Comic: round, soft, coloured border */
+.bubble.style-comic {
+  background: #ffffff;
+  color: #222;
+  border: 2px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+.bubble.style-comic::after {
+  bottom: -8px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+/* Dark: terminal look */
+.bubble.style-dark {
+  background: #17151d;
+  color: #e9e6f2;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, #000);
+  border-left: 4px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.bubble.style-dark .title { color: var(--accent); }
+.bubble.style-dark .status.working { color: #ffb066; }
+.bubble.style-dark .status.thinking { color: #c4a8ff; }
+.bubble.style-dark .status.waiting { color: #7be0a4; }
+.bubble.style-dark .status.attention { color: #ff6b7a; }
+.bubble.style-dark::after {
+  bottom: -6px;
+  width: 10px;
+  height: 6px;
+  background: #17151d;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+/* Glass: translucent, blurred */
+.bubble.style-glass {
+  background: rgba(30, 28, 40, 0.55);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
+  backdrop-filter: blur(10px) saturate(1.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+.bubble.style-glass .title { color: color-mix(in srgb, var(--accent) 55%, #fff); }
+.bubble.style-glass .status { color: #fff !important; opacity: 0.9; }
+.bubble.style-glass .dot { background: var(--accent); }
+
+@keyframes pop {
+  from { transform: translateX(-50%) scale(0.6); }
+  to { transform: translateX(-50%) scale(1); }
+}
+

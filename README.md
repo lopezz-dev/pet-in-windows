@@ -6,34 +6,53 @@ cosa (o juegas).
 
 | Estado del agente | Qué hace la mascota |
 | --- | --- |
-| Trabajando (ejecutando una herramienta) | Camina rápido y pica piedra con un pico ⛏ |
-| Pensando | Pasea despacio con `...` sobre la cabeza |
-| Terminado, esperando tu respuesta | Vuelve a su sitio y se duerme (`Z z z`); al acabar dice «¡Listo!» |
+| Trabajando (ejecutando una herramienta) | Se pone el casco de minero y pica piedra (chispas, gotas de sudor) |
+| Pensando | Pasea despacio con una nube de pensamiento `...` |
+| Terminado, esperando tu respuesta | Celebra con confeti y «¡Listo!», vuelve a su sitio y se duerme (`Zzz`) |
 | Necesita tu permiso | Salta con una `!` roja y un bocadillo «¡Te necesito!» |
 | Subagente en marcha | Una mascota pequeña que sigue a su madre |
 
 Pasa el ratón por encima de una mascota para ver el proyecto, la rama, qué está haciendo y la
-última tarea o respuesta. Haz clic para fijar el bocadillo. Fuera de las mascotas la ventana
+última tarea o respuesta. Clic: fija el bocadillo. Clic derecho: abre los ajustes.
+La bombilla de las antenas (o la linterna del casco) también indica el estado por color. Fuera de las mascotas la ventana
 deja pasar los clics, así que no estorba.
 
 ## Cómo funciona
 
-- **Sin configuración:** lee los transcripts que Claude Code ya escribe en
-  `~/.claude/projects/<proyecto>/<sesión>.jsonl` (y los subagentes en `<sesión>/subagents/`).
-  Respeta `CLAUDE_CONFIG_DIR` si lo usas.
-- Solo lee el final de cada archivo y cachea por fecha y tamaño. La app ocupa unos 40 MB de RAM.
-- «Necesita permiso» es por ahora una heurística: una herramienta lleva más de 25 s sin resultado
-  y no estás en modo `bypassPermissions`. Un comando largo puede dar un falso positivo.
-- Se muestran como máximo 8 mascotas, priorizando las que te necesitan y las que trabajan. Las
-  sesiones terminadas desaparecen a los 45 minutos.
+- **Sin configuración.** Las conversaciones abiertas salen del registro de procesos de Claude Code,
+  `~/.claude/sessions/<pid>.json`: cada proceso `claude` vivo tiene su id de sesión, nombre y estado
+  `busy`/`idle`. Los detalles (herramienta en curso, tarea, última respuesta) salen de los transcripts,
+  `~/.claude/projects/<proyecto>/<sesión>.jsonl`, y los subagentes de `<sesión>/subagents/`.
+  Si usas `CLAUDE_CONFIG_DIR`, se respeta.
+- **Qué mascotas se ven.** Por defecto, solo las conversaciones que están trabajando, más las que terminan
+  mientras la app las vigila (durante 15 min, configurable). La app de escritorio mantiene vivos procesos
+  `idle` de muchas conversaciones antiguas, y esas no aparecen salvo que actives «Mostrar todas las
+  conversaciones abiertas».
+- **«Necesita tu permiso»** = el proceso está `idle` pero la última llamada a una herramienta no tiene
+  resultado.
+- Con versiones antiguas de Claude Code sin registro, se usan los transcripts modificados recientemente.
+
+## Ajustes
+
+Desde la bandeja (**Ajustes…**) o con clic derecho sobre una mascota. Hay vista previa en vivo y se
+guarda solo, en `%APPDATA%/dev.petinwindows.app/settings.json`:
+
+- **Mascota:** color único por sesión (eliges qué colores entran en la rotación) o un color fijo con
+  selector libre, tamaño, velocidad y casco de minero.
+- **Bocadillo:** estilos Pixel, Cómic, Terminal y Cristal, tamaño de texto, color de acento y si se
+  muestra la tarea o la última respuesta.
+- **Comportamiento:** zona de paseo, cuánto tiempo siguen visibles las terminadas, máximo de mascotas,
+  subagentes y celebración.
 
 ## Stack
 
 - [Tauri v2](https://tauri.app) (Rust + WebView2): ventana transparente, siempre encima,
   clic-a-través e icono en la bandeja.
 - `src-tauri/src/sessions.rs`: lector de sesiones → estados.
-- `src/`: TypeScript + canvas. Los sprites se definen en código (`src/sprites.ts`) como medias
-  rejillas que se reflejan.
+- `src/art.ts`: pixel art **procedural**. El cuerpo se rasteriza (squircle, contorno, rampa de 3 tonos
+  con desplazamiento de matiz, barriga y brillo), así que cualquier color funciona y el squash & stretch
+  es solo cambiar el tamaño. Cara, patas, antenas, casco y pico se colocan píxel a píxel.
+- `src/main.ts`: mascotas, partículas y bocadillos. `src/settings-ui.ts`: ventana de ajustes.
 
 ## Desarrollo
 

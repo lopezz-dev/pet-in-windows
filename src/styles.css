@@ -23,82 +23,9 @@ body {
   pointer-events: none;
 }
 
-.bubble {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  max-width: 260px;
-  min-width: 120px;
-  padding: 6px 8px;
-  background: #fff8ec;
-  color: #1a1a1a;
-  border: 2px solid #1a1a1a;
-  box-shadow: 3px 3px 0 #1a1a1a;
-  font: 12px/1.3 "Cascadia Mono", Consolas, "Courier New", monospace;
-  transform: translateX(-50%);
-  pointer-events: auto;
-  display: none;
-}
-
-.bubble.show {
-  display: block;
-  animation: pop 0.12s steps(3);
-}
-
-/* Pixel-style tail */
-.bubble::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  bottom: -8px;
-  width: 8px;
-  height: 6px;
-  background: #fff8ec;
-  border: 2px solid #1a1a1a;
-  border-top: none;
-  transform: translateX(-50%);
-}
-
-.bubble .title {
-  font-weight: 700;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.bubble .status {
-  margin-top: 2px;
-}
-
-.bubble .status.working { color: #b4541f; }
-.bubble .status.thinking { color: #6b4fbb; }
-.bubble .status.waiting { color: #2d7a46; }
-.bubble .status.attention { color: #c0262d; font-weight: 700; }
-.bubble .status.idle { color: #6a6a6a; }
-
-.bubble .detail {
-  margin-top: 4px;
-  color: #555;
-  font-style: italic;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.bubble.mini {
-  min-width: 0;
-  font-weight: 700;
-}
-
-@keyframes pop {
-  from { transform: translateX(-50%) scale(0.6); }
-  to { transform: translateX(-50%) scale(1); }
-}
-
 /* Only when previewing in a normal browser: fake taskbar so it's visible. */
 body.browser {
-  background: linear-gradient(#3a6ea5, #6aa0d8);
+  background: linear-gradient(#2b5d8f, #6aa0d8);
 }
 body.browser::after {
   content: "";
@@ -113,5 +40,5 @@ body.browser #stage,
 body.browser #bubbles {
   bottom: 48px;
   top: auto;
-  height: 160px;
+  height: 200px;
 }

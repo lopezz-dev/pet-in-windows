@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pet in Windows · Ajustes</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <main class="layout">
+      <aside class="preview">
+        <h1 class="brand">Pet in Windows</h1>
+        <div class="stage-wrap">
+          <canvas id="preview"></canvas>
+          <div id="preview-bubble" class="bubble show"></div>
+        </div>
+        <div class="seg states" id="preview-states" role="tablist" aria-label="Estado de la vista previa">
+          <button data-state="working" class="on">Trabaja</button>
+          <button data-state="thinking">Piensa</button>
+          <button data-state="waiting">Duerme</button>
+          <button data-state="attention">Te necesita</button>
+        </div>
+        <p class="hint">Pasa el ratón por una mascota para ver su bocadillo · clic para fijarlo · clic derecho abre estos ajustes.</p>
+      </aside>
+
+      <section class="form">
+        <fieldset>
+          <legend>Mascota</legend>
+
+          <div class="row">
+            <label>Color</label>
+            <div class="seg" id="colorMode">
+              <button data-v="auto">Uno por sesión</button>
+              <button data-v="fixed">Fijo</button>
+            </div>
+          </div>
+          <div class="row">
+            <span class="help" id="color-help"></span>
+            <div class="swatches" id="swatches"></div>
+          </div>
+
+          <div class="row">
+            <label for="scale">Tamaño</label>
+            <div class="range"><input id="scale" type="range" min="2" max="5" step="1" /><output></output></div>
+          </div>
+          <div class="row">
+            <label for="speed">Velocidad</label>
+            <div class="range"><input id="speed" type="range" min="0.5" max="2" step="0.25" /><output></output></div>
+          </div>
+          <div class="row">
+            <label for="hat">Casco de minero al trabajar</label>
+            <input id="hat" type="checkbox" class="toggle" />
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Bocadillo</legend>
+          <div class="styles" id="bubbleStyle">
+            <button data-v="pixel"><span class="bubble style-pixel show mini">Pixel</span></button>
+            <button data-v="comic"><span class="bubble style-comic show mini">Cómic</span></button>
+            <button data-v="dark"><span class="bubble style-dark show mini">Terminal</span></button>
+            <button data-v="glass"><span class="bubble style-glass show mini">Cristal</span></button>
+          </div>
+          <div class="row">
+            <label>Tamaño del texto</label>
+            <div class="seg" id="bubbleSize">
+              <button data-v="S">S</button>
+              <button data-v="M">M</button>
+              <button data-v="L">L</button>
+            </div>
+          </div>
+          <div class="row">
+            <label>Color de acento</label>
+            <div class="swatches" id="accent"></div>
+          </div>
+          <div class="row">
+            <label for="bubbleDetail">Mostrar tarea / última respuesta</label>
+            <input id="bubbleDetail" type="checkbox" class="toggle" />
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Comportamiento</legend>
+          <div class="row">
+            <label>Zona de paseo</label>
+            <div class="seg" id="zone">
+              <button data-v="left">Izquierda</button>
+              <button data-v="center">Centro</button>
+              <button data-v="right">Derecha</button>
+              <button data-v="all">Toda</button>
+            </div>
+          </div>
+          <div class="row">
+            <label for="idleMinutes">Las terminadas siguen visibles</label>
+            <div class="range"><input id="idleMinutes" type="range" min="1" max="60" step="1" /><output></output></div>
+          </div>
+          <div class="row">
+            <label for="maxPets">Máximo de mascotas</label>
+            <div class="range"><input id="maxPets" type="range" min="1" max="12" step="1" /><output></output></div>
+          </div>
+          <div class="row">
+            <label for="showAllOpen">Mostrar todas las conversaciones abiertas<small>aunque lleven rato inactivas</small></label>
+            <input id="showAllOpen" type="checkbox" class="toggle" />
+          </div>
+          <div class="row">
+            <label for="showSubagents">Subagentes como mascotas pequeñas</label>
+            <input id="showSubagents" type="checkbox" class="toggle" />
+          </div>
+          <div class="row">
+            <label for="celebrate">Celebrar cuando termina («¡Listo!» + confeti)</label>
+            <input id="celebrate" type="checkbox" class="toggle" />
+          </div>
+        </fieldset>
+
+        <footer>
+          <span id="saved" class="saved">Guardado</span>
+          <button id="reset" class="ghost">Restablecer</button>
+        </footer>
+      </section>
+    </main>
+    <script type="module" src="/src/settings-ui.ts"></script>
+  </body>
+</html>

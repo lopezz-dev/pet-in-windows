@@ -8,10 +8,46 @@ use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow, WindowEvent};
 
 /// Height of the strip that sits on top of the taskbar, in logical pixels.
-const STRIP_HEIGHT: f64 = 160.0;
+const STRIP_HEIGHT: f64 = 200.0;
+
+// --- Settings ---------------------------------------------------------------
+// The schema lives in the frontend (src/settings.ts); Rust only stores the JSON
+// and broadcasts changes so the pets update live.
+
+fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+}
+
+#[tauri::command]
+fn load_settings(app: AppHandle) -> serde_json::Value {
+    settings_path(&app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<(), String> {
+    let path = settings_path(&app).ok_or("no config dir")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(&path, text).map_err(|e| e.to_string())?;
+    app.emit("settings", &settings).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("settings") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
 
 /// The frontend calls this when the cursor enters/leaves a pet or bubble:
 /// the window ignores the mouse everywhere else so it never blocks your desktop.
@@ -59,7 +95,16 @@ fn main() {
     }
 
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_click_through, log_js])
+        .invoke_handler(tauri::generate_handler![set_click_through, log_js, load_settings, save_settings, open_settings])
+        .on_window_event(|w, e| {
+            // Closing the settings window just hides it.
+            if let WindowEvent::CloseRequested { api, .. } = e {
+                if w.label() == "settings" {
+                    api.prevent_close();
+                    let _ = w.hide();
+                }
+            }
+        })
         .setup(|app| {
             let win = app
                 .get_webview_window("pet")
@@ -68,16 +113,18 @@ fn main() {
             win.set_ignore_cursor_events(true)?;
 
             // --- Tray icon -------------------------------------------------
+            let settings = MenuItem::with_id(app, "settings", "Ajustes…", true, None::<&str>)?;
             let toggle = MenuItem::with_id(app, "toggle", "Mostrar / ocultar", true, None::<&str>)?;
             let demo = MenuItem::with_id(app, "demo", "Modo demo", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Salir", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&toggle, &demo, &quit])?;
+            let menu = Menu::with_items(app, &[&settings, &toggle, &demo, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().expect("bundle icon"))
                 .tooltip("Pet in Windows")
                 .menu(&menu)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
+                    "settings" => open_settings(app.clone()),
                     "demo" => {
                         let _ = app.emit_to("pet", "toggle-demo", ());
                     }
