@@ -17,6 +17,20 @@ Pasa el ratón por encima de una mascota para ver el proyecto, la rama, qué est
 La bombilla de las antenas (o la linterna del casco) también indica el estado por color. Fuera de las mascotas la ventana
 deja pasar los clics, así que no estorba.
 
+## Descargar
+
+1. Ve a [**Releases**](../../releases/latest) y baja `Pet.in.Windows_x.y.z_x64-setup.exe`.
+2. Instálalo. Windows SmartScreen avisará de «editor desconocido», porque el instalador aún no está
+   firmado: **Más información → Ejecutar de todas formas**.
+3. Aparecerá un icono en la bandeja del sistema. Abre una conversación de
+   [Claude Code](https://claude.com/claude-code) (terminal, IDE o app de escritorio) y verás su mascota.
+
+Requisitos: Windows 10/11 y Claude Code. Por ahora solo funciona con Claude Code: lee los
+archivos que Claude Code guarda en `~/.claude`, sin red ni cuentas. Para soportar otras IA hay que
+añadir un lector nuevo en `src-tauri/src/sessions.rs`, y los PR son bienvenidos.
+
+> Proyecto de la comunidad, sin relación con Anthropic.
+
 ## Temáticas
 
 | Tema | Detalle | Trabajando | Indicador de estado |
@@ -96,12 +110,25 @@ Utilidades:
 - `PET_DEBUG=1 npm run tauri dev`: registra la posición del cursor.
 - Bandeja del sistema → **Modo demo**: mascotas falsas que van rotando entre todos los estados.
 
+### Publicar una versión
+
+Sube la versión en `package.json`, `src-tauri/Cargo.toml` y `src-tauri/tauri.conf.json`, y luego:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+GitHub Actions (`.github/workflows/release.yml`) compila el instalador y lo adjunta a una Release
+en borrador. Revísala y publícala desde GitHub.
+
 ## Ideas / hoja de ruta
 
 - Hooks de Claude Code (`Notification`, `Stop`, `PreToolUse`…) a un endpoint local para tener el
   estado de permiso exacto.
 - Clic en una mascota → enfocar la terminal o la ventana de esa sesión.
-- Más especies y skins, y ajustes (zona de paseo, máximo de mascotas, escala).
+- Más temáticas originales.
+- Soporte para otras IA de programación.
+- Instalador firmado y auto-actualización.
 - Ocultarse con juegos a pantalla completa.
 - Soporte multi-monitor y barra de tareas en vertical.
 

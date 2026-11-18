@@ -630,9 +630,9 @@ function mk(id: string, name: string, project: string, state: AgentState, activi
 }
 const DEMO: Agent[] = [
   mk("demo-1", "Mascota en la barra de tareas", "pet_in_windows", "working", "Edit sessions.rs"),
-  mk("demo-2", "Revisión nota de planificación", "muninn", "thinking", ""),
-  mk("demo-3", "Migraciones de seguridad", "muninn", "waiting", ""),
-  mk("demo-4", "Deploy de la landing", "aboutme", "attention", "Bash npm run deploy"),
+  mk("demo-2", "Arreglar el login con GitHub", "my-webapp", "thinking", ""),
+  mk("demo-3", "Migraciones de la base de datos", "my-webapp", "waiting", ""),
+  mk("demo-4", "Deploy de la landing", "landing-page", "attention", "Bash npm run deploy"),
   { ...mk("demo-sub", "", "pet_in_windows", "working", "Grep cursor_position"), kind: "sub", parentId: "demo-1", agentType: "Explore", description: "Find how Tauri reports the cursor" },
 ];
 let demoTick = 0;
